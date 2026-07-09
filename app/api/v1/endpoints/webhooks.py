@@ -7,7 +7,7 @@ from app.services.webhook_service import process_webhook_event
 
 router = APIRouter()
 
-@router.post("/stripe")
+@router.post("/webhook")
 async def stripe_webhook(request: Request, stripe_signature: str = Header(None), db: Session = Depends(get_db)):
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Missing stripe signature")
