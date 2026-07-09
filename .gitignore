@@ -1,0 +1,47 @@
+# Environment variables (Stripe API keys, webhook secrets)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# Stripe CLI
+.stripe/
+stripe-cli.log
+
+# Stripe webhook logs / event dumps
+webhook-events/
+*.stripe-events.json
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# General secrets / credentials
+*.pem
+*.key
+secrets.json
+config/secrets.yml
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# Build output
+dist/
+build/
