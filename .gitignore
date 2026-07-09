@@ -45,3 +45,7 @@ logs/
 # Build output
 dist/
 build/
+
+# Keep HTML files even if inside ignored build/dist folders
+!*.html
+!**/*.html
