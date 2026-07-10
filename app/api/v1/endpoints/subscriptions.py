@@ -22,6 +22,25 @@ def create_new_subscription(sub_data: SubscriptionCreate, db: Session = Depends(
         traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(e))
 
+@router.get("/", response_model=List[SubscriptionResponse])
+def get_all_subscriptions(db: Session = Depends(get_db)):
+    """
+    Get all subscriptions in the system.
+    Useful for testing and admin purposes.
+    """
+    subscriptions = db.query(Subscription).all()
+    return subscriptions
+
+@router.get("/{subscription_id}", response_model=SubscriptionResponse)
+def get_subscription(subscription_id: int, db: Session = Depends(get_db)):
+    """
+    Get a specific subscription by ID.
+    """
+    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if not subscription:
+        raise HTTPException(status_code=404, detail=f"Subscription {subscription_id} not found")
+    return subscription
+
 @router.get("/customer/{customer_id}", response_model=List[SubscriptionResponse])
 def get_customer_subscriptions(customer_id: int, db: Session = Depends(get_db)):
     """
@@ -87,3 +106,29 @@ def get_customer_subscriptions(customer_id: int, db: Session = Depends(get_db)):
         db.rollback()
     
     return subscriptions
+
+@router.delete("/{subscription_id}", response_model=SubscriptionResponse)
+def cancel_subscription(
+    subscription_id: int,
+    cancel_immediately: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Cancel a subscription.
+    
+    Args:
+        subscription_id: Local subscription ID to cancel
+        cancel_immediately: If True, cancels immediately. If False (default), cancels at period end.
+    
+    Returns:
+        Updated subscription with cancellation status
+    """
+    try:
+        service = SubscriptionService(db)
+        updated_subscription = service.cancel_subscription(subscription_id, cancel_immediately)
+        return updated_subscription
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error canceling subscription {subscription_id}: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))

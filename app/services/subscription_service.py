@@ -173,3 +173,60 @@ class SubscriptionService:
     def get_subscriptions_for_customer(self, customer_id: int):
         """Get all subscriptions for a customer."""
         return self.db.query(Subscription).filter(Subscription.customer_id == customer_id).all()
+
+    def cancel_subscription(self, subscription_id: int, cancel_immediately: bool = False):
+        """
+        Cancel a subscription.
+        
+        Args:
+            subscription_id: Local subscription ID
+            cancel_immediately: If True, cancels immediately. If False, cancels at period end.
+        
+        Returns:
+            Updated subscription object
+        """
+        db_sub = self.db.query(Subscription).filter(Subscription.id == subscription_id).first()
+        if not db_sub:
+            raise ValueError(f"Subscription with ID {subscription_id} not found")
+        
+        if not db_sub.stripe_subscription_id:
+            raise ValueError(f"Subscription {subscription_id} has no Stripe subscription ID")
+        
+        try:
+            if cancel_immediately:
+                # Cancel immediately
+                stripe_sub = stripe.Subscription.cancel(db_sub.stripe_subscription_id)
+                logger.info(f"Immediately canceled Stripe subscription {db_sub.stripe_subscription_id}")
+            else:
+                # Cancel at period end
+                stripe_sub = stripe.Subscription.modify(
+                    db_sub.stripe_subscription_id,
+                    cancel_at_period_end=True
+                )
+                logger.info(f"Scheduled cancellation for Stripe subscription {db_sub.stripe_subscription_id} at period end")
+            
+            # Update local subscription
+            db_sub.status = stripe_sub.status
+            db_sub.cancel_at_period_end = stripe_sub.cancel_at_period_end
+            
+            self.db.commit()
+            self.db.refresh(db_sub)
+            
+            logger.info(f"Successfully updated local subscription {db_sub.id} with cancellation status")
+            
+            return db_sub
+            
+        except stripe.error.InvalidRequestError as e:
+            self.db.rollback()
+            logger.error(f"Stripe invalid request during cancellation: {str(e)}")
+            raise ValueError(f"Cannot cancel subscription: {str(e)}")
+            
+        except stripe.error.StripeError as e:
+            self.db.rollback()
+            logger.error(f"Stripe error during cancellation: {str(e)}")
+            raise ValueError(f"Payment processing error: {str(e)}")
+            
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Unexpected error during subscription cancellation: {str(e)}", exc_info=True)
+            raise
