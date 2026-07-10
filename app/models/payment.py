@@ -14,6 +14,9 @@ class Payment(Base):
     currency = Column(String, default="usd")
     status = Column(String, default="pending") # pending, succeeded, failed, refunded
     
+    # Idempotency key for preventing duplicate payment creation
+    idempotency_key = Column(String, unique=True, index=True, nullable=True)
+    
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     order = relationship("Order", back_populates="payment")
