@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Body
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from typing import Optional
 import stripe
 import logging
 from app.core.database import get_db
+from app.core.rate_limit import rate_limit
 from app.schemas.payment import PaymentCreateRequest, PaymentIntentResponse
 from app.repositories.product_repository import product as product_repo
 from app.repositories.order_repository import order as order_repo, OrderCreate
@@ -15,11 +16,64 @@ from app.models.customer import Customer
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/", response_model=PaymentIntentResponse)
+@router.post(
+    "/",
+    response_model=PaymentIntentResponse,
+    summary="Create a payment intent",
+    description="""
+    Create a Stripe Payment Intent for one-time payment processing.
+    
+    **Features:**
+    - Idempotent requests using `Idempotency-Key` header
+    - Atomic transaction handling (DB + Stripe)
+    - Automatic retry logic for network failures
+    - Rate limited to 10 requests per minute per IP
+    
+    **Flow:**
+    1. Validates customer and product
+    2. Creates database order
+    3. Creates Stripe PaymentIntent
+    4. Returns client_secret for frontend
+    
+    **Idempotency:**
+    Send an `Idempotency-Key` header to prevent duplicate payments from double-clicks or retries.
+    """,
+    responses={
+        200: {
+            "description": "Payment intent created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "client_secret": "pi_3abc123_secret_xyz789",
+                        "payment_id": 42
+                    }
+                }
+            }
+        },
+        400: {"description": "Invalid request or payment processing error"},
+        404: {"description": "Customer or product not found"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    },
+    tags=["payments"],
+    dependencies=[Depends(rate_limit(limit=10, window_seconds=60))]
+)
 def create_payment(
-    request: PaymentCreateRequest,
+    request: PaymentCreateRequest = Body(
+        ...,
+        examples={
+            "one_time_payment": {
+                "summary": "One-time payment example",
+                "description": "Create a payment for an existing product",
+                "value": {
+                    "customer_id": 1,
+                    "product_id": 1
+                }
+            }
+        }
+    ),
     db: Session = Depends(get_db),
-    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key")
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", description="Unique key to prevent duplicate payments")
 ):
     """
     Create a payment intent with atomic transaction handling and idempotency support.
@@ -65,7 +119,7 @@ def create_payment(
     if not active_price:
         raise HTTPException(status_code=400, detail="Product has no active price")
         
-    amount_cents = active_price.unit_amount
+    amount_cents = active_price.unit_amount_cents
     currency = active_price.currency
 
     try:

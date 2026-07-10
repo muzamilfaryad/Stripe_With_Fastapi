@@ -21,13 +21,15 @@ class SubscriptionService:
         Create a checkout session for subscription with atomic transaction handling.
         """
         customer = self.db.query(Customer).filter(Customer.id == sub_data.customer_id).first()
-        price = self.db.query(Price).filter(Price.id == sub_data.price_id).first()
+        if not customer:
+            raise ValueError(f"Customer with ID {sub_data.customer_id} not found")
         
-        if not customer or not price:
-            raise ValueError("Customer or Price not found")
+        price = self.db.query(Price).filter(Price.id == sub_data.price_id).first()
+        if not price:
+            raise ValueError(f"Price with ID {sub_data.price_id} not found")
         
         if not customer.stripe_customer_id:
-            raise ValueError("Customer does not have a Stripe customer ID")
+            raise ValueError(f"Customer {customer.id} ({customer.email}) does not have a Stripe customer ID. Create customer in Stripe first.")
         
         try:
             # Create local subscription record but don't commit yet
@@ -85,13 +87,15 @@ class SubscriptionService:
         Create a subscription with Payment Intent flow and atomic transaction handling.
         """
         customer = self.db.query(Customer).filter(Customer.id == sub_data.customer_id).first()
-        price = self.db.query(Price).filter(Price.id == sub_data.price_id).first()
+        if not customer:
+            raise ValueError(f"Customer with ID {sub_data.customer_id} not found")
         
-        if not customer or not price:
-            raise ValueError("Customer or Price not found")
+        price = self.db.query(Price).filter(Price.id == sub_data.price_id).first()
+        if not price:
+            raise ValueError(f"Price with ID {sub_data.price_id} not found")
         
         if not customer.stripe_customer_id:
-            raise ValueError("Customer does not have a Stripe customer ID")
+            raise ValueError(f"Customer {customer.id} ({customer.email}) does not have a Stripe customer ID. Create customer in Stripe first.")
         
         try:
             # Create local subscription record but don't commit yet

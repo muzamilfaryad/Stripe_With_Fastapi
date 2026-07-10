@@ -21,7 +21,7 @@ class Price(Base):
     stripe_price_id = Column(String, unique=True, index=True, nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     currency = Column(String, default="usd")
-    unit_amount = Column(Integer, nullable=False) # strictly integer cents
+    unit_amount_cents = Column(Integer, nullable=False)  # Always in cents for precision
     recurring_interval = Column(String, nullable=True) # e.g., 'month', 'year'. If null, it's one-time
     active = Column(Boolean, default=True)
 

@@ -1,10 +1,10 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
 class SubscriptionCreate(BaseModel):
-    customer_id: int
-    price_id: int
+    customer_id: int = Field(gt=0, description="Customer ID")
+    price_id: int = Field(gt=0, description="Price ID for the subscription")
 
 class SubscriptionResponse(BaseModel):
     id: int

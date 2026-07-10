@@ -129,13 +129,31 @@ def handle_subscription_created(db: Session, event: stripe.Event):
         logger.warning(f"Customer {subscription.customer} not found for subscription {subscription.id}")
         return
     
+    # Get the stripe_price_id from subscription
+    stripe_price_id = subscription.items.data[0].price.id if subscription.items.data else None
+    
+    if not stripe_price_id:
+        logger.error(f"No price found in subscription {subscription.id}")
+        return
+    
+    # Find the local price by stripe_price_id
+    from app.models.product import Price
+    local_price = db.query(Price).filter(Price.stripe_price_id == stripe_price_id).first()
+    
+    if not local_price:
+        logger.warning(f"Price {stripe_price_id} not found locally for subscription {subscription.id}. Creating subscription without price_id link.")
+        # Create subscription without price_id if not found locally
+        price_id = None
+    else:
+        price_id = local_price.id
+    
     # Create new subscription record
     new_sub = Subscription(
         customer_id=customer.id,
-        price_id=1,  # You might need to look up the actual price_id from your database
+        price_id=price_id,  # May be None if price not found locally
         stripe_subscription_id=subscription.id,
         stripe_customer_id=subscription.customer,
-        stripe_price_id=subscription.items.data[0].price.id if subscription.items.data else None,
+        stripe_price_id=stripe_price_id,
         status=subscription.status,
         cancel_at_period_end=subscription.cancel_at_period_end,
         current_period_start=datetime.fromtimestamp(subscription.current_period_start, tz=timezone.utc),

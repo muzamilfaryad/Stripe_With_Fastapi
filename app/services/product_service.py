@@ -25,10 +25,13 @@ def create_product(db: Session, product_data: ProductCreate) -> Product:
         recurring_dict = {}
         if price_data.recurring_interval:
             recurring_dict = {"interval": price_data.recurring_interval}
+        
+        # Convert dollars to cents for Stripe API
+        unit_amount_cents = int(price_data.unit_amount * 100)
             
         stripe_price = stripe.Price.create(
             product=stripe_product.id,
-            unit_amount=int(price_data.unit_amount * 100), # Send cents to Stripe
+            unit_amount=unit_amount_cents,  # Stripe expects cents
             currency=price_data.currency,
             recurring=recurring_dict if recurring_dict else None
         )
@@ -37,7 +40,7 @@ def create_product(db: Session, product_data: ProductCreate) -> Product:
             stripe_price_id=stripe_price.id,
             product_id=db_product.id,
             currency=price_data.currency,
-            unit_amount=price_data.unit_amount,
+            unit_amount_cents=unit_amount_cents,  # Store in cents
             recurring_interval=price_data.recurring_interval
         )
         db.add(db_price)

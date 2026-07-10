@@ -1,9 +1,9 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 class PaymentCreateRequest(BaseModel):
-    customer_id: int
-    product_id: int # We lookup the price of this product backend
+    customer_id: int = Field(gt=0, description="Customer ID")
+    product_id: int = Field(gt=0, description="Product ID")
 
 class PaymentIntentResponse(BaseModel):
     client_secret: str
