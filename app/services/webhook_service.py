@@ -334,29 +334,39 @@ def handle_invoice_payment_succeeded(db: Session, event: stripe.Event):
         logger.info(f"Invoice {invoice.id} paid but not related to a subscription.")
         return
     
-    db_sub = db.query(Subscription).filter(
-        Subscription.stripe_subscription_id == subscription_id
-    ).first()
-    
-    if db_sub:
-        # Update subscription status if needed
-        if db_sub.status != 'active':
-            db_sub.status = 'active'
-            db.commit()
-            logger.info(f"Subscription {db_sub.id} reactivated after successful invoice payment.")
+    try:
+        db_sub = db.query(Subscription).filter(
+            Subscription.stripe_subscription_id == subscription_id
+        ).first()
         
-        customer = db.query(Customer).filter(Customer.id == db_sub.customer_id).first()
-        
-        logger.info(
-            f"Invoice {invoice.id} paid for subscription {db_sub.id}. "
-            f"Amount: {invoice.amount_paid/100} {invoice.currency.upper()}"
-        )
-        
-        if customer:
-            # TODO: Send payment receipt email
-            logger.info(f"Payment receipt for {customer.email}: Invoice {invoice.id}")
-    else:
-        logger.warning(f"Subscription {subscription_id} not found for invoice payment.")
+        if db_sub:
+            # Update subscription status if needed
+            if db_sub.status != 'active':
+                db_sub.status = 'active'
+                db.commit()
+                logger.info(f"Subscription {db_sub.id} reactivated after successful invoice payment.")
+            
+            customer = db.query(Customer).filter(Customer.id == db_sub.customer_id).first()
+            
+            logger.info(
+                f"Invoice {invoice.id} paid for subscription {db_sub.id}. "
+                f"Amount: {invoice.amount_paid/100} {invoice.currency.upper()}"
+            )
+            
+            if customer:
+                # TODO: Send payment receipt email
+                logger.info(f"Payment receipt for {customer.email}: Invoice {invoice.id}")
+        else:
+            # Subscription not in database yet - this is OK for new subscriptions
+            # The subscription will be created when customer.subscription.created fires
+            logger.info(
+                f"Subscription {subscription_id} not found in database for invoice {invoice.id}. "
+                f"This is expected for new subscriptions. Amount: {invoice.amount_paid/100} {invoice.currency.upper()}"
+            )
+    except Exception as e:
+        # Log error but don't raise - allow webhook to succeed
+        logger.error(f"Error processing invoice.payment_succeeded for {invoice.id}: {str(e)}")
+        # Don't re-raise - we want to return 200 OK to Stripe
 
 
 def handle_invoice_payment_failed(db: Session, event: stripe.Event):
@@ -368,36 +378,46 @@ def handle_invoice_payment_failed(db: Session, event: stripe.Event):
         logger.info(f"Invoice {invoice.id} payment failed but not related to a subscription.")
         return
     
-    db_sub = db.query(Subscription).filter(
-        Subscription.stripe_subscription_id == subscription_id
-    ).first()
-    
-    if db_sub:
-        # Update subscription to past_due
-        db_sub.status = 'past_due'
-        db.commit()
+    try:
+        db_sub = db.query(Subscription).filter(
+            Subscription.stripe_subscription_id == subscription_id
+        ).first()
         
-        customer = db.query(Customer).filter(Customer.id == db_sub.customer_id).first()
-        
-        logger.warning(
-            f"Invoice {invoice.id} FAILED for subscription {db_sub.id}. "
-            f"Amount: {invoice.amount_due/100} {invoice.currency.upper()}, "
-            f"Attempt: {invoice.attempt_count}"
-        )
-        
-        if customer:
-            # TODO: Send payment failure notification
+        if db_sub:
+            # Update subscription to past_due
+            db_sub.status = 'past_due'
+            db.commit()
+            
+            customer = db.query(Customer).filter(Customer.id == db_sub.customer_id).first()
+            
             logger.warning(
-                f"Payment failure notification needed for {customer.email}. "
-                f"Subscription {db_sub.id} is now past_due."
+                f"Invoice {invoice.id} FAILED for subscription {db_sub.id}. "
+                f"Amount: {invoice.amount_due/100} {invoice.currency.upper()}, "
+                f"Attempt: {invoice.attempt_count}"
             )
             
-            # TODO: Integrate with email service
-            # send_email(
-            #     to=customer.email,
-            #     subject="Payment Failed - Action Required",
-            #     body=f"Your subscription payment failed. Please update your payment method."
-            # )
+            if customer:
+                # TODO: Send payment failure notification
+                logger.warning(
+                    f"Payment failure notification needed for {customer.email}. "
+                    f"Subscription {db_sub.id} is now past_due."
+                )
+                
+                # TODO: Integrate with email service
+                # send_email(
+                #     to=customer.email,
+                #     subject="Payment Failed - Action Required",
+                #     body=f"Your subscription payment failed. Please update your payment method."
+                # )
+        else:
+            logger.warning(
+                f"Subscription {subscription_id} not found for failed invoice {invoice.id}. "
+                f"This may be a test invoice or subscription not yet in database."
+            )
+    except Exception as e:
+        # Log error but don't raise - allow webhook to succeed
+        logger.error(f"Error processing invoice.payment_failed for {invoice.id}: {str(e)}")
+        # Don't re-raise - we want to return 200 OK to Stripe
     else:
         logger.warning(f"Subscription {subscription_id} not found for failed invoice.")
 
