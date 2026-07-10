@@ -9,10 +9,11 @@ class Payment(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_id = Column(Integer, ForeignKey("orders.id"), nullable=False, unique=True)
     stripe_payment_intent_id = Column(String, unique=True, index=True, nullable=True)
+    stripe_checkout_session_id = Column(String, unique=True, index=True, nullable=True)
     
     amount_cents = Column(Integer, nullable=False)
     currency = Column(String, default="usd")
-    status = Column(String, default="pending") # pending, succeeded, failed, refunded
+    status = Column(String, default="pending")  # pending, succeeded, failed, refunded, canceled
     
     # Idempotency key for preventing duplicate payment creation
     idempotency_key = Column(String, unique=True, index=True, nullable=True)

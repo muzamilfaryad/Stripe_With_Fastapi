@@ -12,6 +12,7 @@ class Product(Base):
     active = Column(Boolean, default=True)
     
     prices = relationship("Price", back_populates="product", cascade="all, delete-orphan")
+    orders = relationship("Order", back_populates="product")
 
 class Price(Base):
     __tablename__ = "prices"

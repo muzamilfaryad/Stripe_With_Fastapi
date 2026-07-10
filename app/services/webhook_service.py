@@ -11,6 +11,47 @@ import logging
 logger = logging.getLogger(__name__)
 
 # ============================================================================
+# CHECKOUT SESSION HANDLERS
+# ============================================================================
+
+def handle_checkout_session_completed(db: Session, event: stripe.Event):
+    """Handle completed checkout session - link payment_intent to payment record"""
+    session = event.data.object
+    checkout_session_id = session.id
+    payment_intent_id = session.payment_intent if session.mode == 'payment' else None
+    subscription_id = session.subscription if session.mode == 'subscription' else None
+    
+    # Handle payment mode checkout
+    if session.mode == 'payment' and payment_intent_id:
+        db_payment = payment_repo.get_by_checkout_session(db, checkout_session_id)
+        
+        if db_payment:
+            # Update payment with payment_intent_id
+            payment_repo.update(db, db_obj=db_payment, obj_in={
+                "stripe_payment_intent_id": payment_intent_id
+            })
+            logger.info(f"Linked Payment {db_payment.id} to PaymentIntent {payment_intent_id}")
+        else:
+            logger.warning(f"Checkout session {checkout_session_id} completed but no Payment found")
+    
+    # Handle subscription mode checkout
+    elif session.mode == 'subscription' and subscription_id:
+        # Find subscription by client_reference_id if set
+        client_reference_id = session.client_reference_id
+        
+        if client_reference_id:
+            db_sub = db.query(Subscription).filter(Subscription.id == int(client_reference_id)).first()
+            if db_sub and not db_sub.stripe_subscription_id:
+                db_sub.stripe_subscription_id = subscription_id
+                db.commit()
+                logger.info(f"Linked Subscription {db_sub.id} to Stripe subscription {subscription_id}")
+        else:
+            logger.info(f"Subscription checkout completed: {subscription_id}")
+    
+    else:
+        logger.info(f"Checkout session {checkout_session_id} completed in {session.mode} mode")
+
+# ============================================================================
 # PAYMENT INTENT HANDLERS
 # ============================================================================
 
@@ -347,6 +388,9 @@ def handle_invoice_payment_failed(db: Session, event: stripe.Event):
 # ============================================================================
 
 EVENT_HANDLERS = {
+    # Checkout Session Events
+    'checkout.session.completed': handle_checkout_session_completed,
+    
     # Payment Intent Events
     'payment_intent.succeeded': handle_payment_intent_succeeded,
     'payment_intent.payment_failed': handle_payment_intent_failed,

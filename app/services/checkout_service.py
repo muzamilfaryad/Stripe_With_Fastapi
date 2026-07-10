@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from app.core.config import settings
 from app.models.order import Order
+from app.models.payment import Payment
 from app.models.customer import Customer
 from app.schemas.checkout import CheckoutRequest
 import logging
@@ -13,9 +14,13 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
     """
     Create a checkout session with atomic transaction handling.
     
-    Strategy: Create order first with db.flush() (get ID without committing),
+    Strategy: Create Order and Payment records first with db.flush() (get IDs without committing),
     then create Stripe session, then commit everything together.
-    If Stripe fails, rollback the order creation.
+    If Stripe fails, rollback all database changes.
+    
+    Architecture:
+    - Order: tracks the customer order with status
+    - Payment: tracks the actual payment transaction with amount, currency, and Stripe IDs
     """
     # Get the customer
     customer = db.query(Customer).filter(Customer.id == checkout_req.customer_id).first()
@@ -29,8 +34,7 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
         # 1. Create Order in database but DON'T commit yet
         db_order = Order(
             customer_id=customer.id,
-            amount=checkout_req.amount,
-            currency=checkout_req.currency,
+            product_id=None,  # Can be set if you have product tracking
             status='pending'
         )
         db.add(db_order)
@@ -38,7 +42,19 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
         
         logger.info(f"Created pending order {db_order.id} for customer {customer.id}")
         
-        # 2. Create Stripe Checkout Session with order reference
+        # 2. Create Payment record linked to the order
+        db_payment = Payment(
+            order_id=db_order.id,
+            amount_cents=int(checkout_req.amount * 100),  # Convert dollars to cents
+            currency=checkout_req.currency,
+            status='pending'
+        )
+        db.add(db_payment)
+        db.flush()  # Get the payment.id without committing
+        
+        logger.info(f"Created pending payment {db_payment.id} for order {db_order.id}")
+        
+        # 3. Create Stripe Checkout Session with order reference
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             customer=customer.stripe_customer_id,
@@ -60,14 +76,15 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
         
         logger.info(f"Created Stripe checkout session {session.id} for order {db_order.id}")
         
-        # 3. Update Order with the session ID
-        db_order.stripe_checkout_session_id = session.id
+        # 4. Update Payment with the Stripe session ID
+        db_payment.stripe_checkout_session_id = session.id
         
-        # 4. Commit everything together - atomic operation
+        # 5. Commit everything together - atomic operation
         db.commit()
         db.refresh(db_order)
+        db.refresh(db_payment)
         
-        logger.info(f"Successfully committed order {db_order.id} with session {session.id}")
+        logger.info(f"Successfully committed order {db_order.id} with payment {db_payment.id} and session {session.id}")
         
         return session
         
