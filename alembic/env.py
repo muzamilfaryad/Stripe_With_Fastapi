@@ -17,7 +17,10 @@ if config.config_file_name is not None:
 # add your model's MetaData object here
 from app.core.config import settings
 from app.core.database import Base
-from app.models import customer, order  # ensure models are loaded
+from app.models import (  # ensure ALL models are loaded for autogenerate
+    customer, order, product, payment, subscription, idempotency,
+    connected_account, transfer,
+)
 target_metadata = Base.metadata
 
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)

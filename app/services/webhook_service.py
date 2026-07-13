@@ -507,6 +507,108 @@ def handle_invoice_payment_failed(db: Session, event: stripe.Event):
         # Don't re-raise - we want to return 200 OK to Stripe
 
 # ============================================================================
+# TRANSFER HANDLERS
+# ============================================================================
+
+def handle_transfer_created(db: Session, event: stripe.Event):
+    """Stripe confirmed transfer creation — sync stripe_transfer_id and status."""
+    from app.repositories.transfer_repository import transfer as transfer_repo
+    stripe_transfer = event.data.object
+
+    db_transfer = transfer_repo.get_by_stripe_transfer_id(db, stripe_transfer.id)
+    if db_transfer:
+        transfer_repo.update(db, db_obj=db_transfer, obj_in={
+            "stripe_transfer_id": stripe_transfer.id,
+            "status": "pending",
+        })
+        logger.info(
+            f"Transfer {db_transfer.id} confirmed by Stripe — "
+            f"ID: {stripe_transfer.id}, Amount: {stripe_transfer.amount/100} {stripe_transfer.currency.upper()}"
+        )
+    else:
+        logger.warning(f"transfer.created webhook: no local record for Stripe transfer {stripe_transfer.id}")
+
+
+def handle_transfer_updated(db: Session, event: stripe.Event):
+    """Handle transfer status updates from Stripe."""
+    from app.repositories.transfer_repository import transfer as transfer_repo
+    stripe_transfer = event.data.object
+
+    db_transfer = transfer_repo.get_by_stripe_transfer_id(db, stripe_transfer.id)
+    if not db_transfer:
+        logger.warning(f"transfer.updated webhook: no local record for Stripe transfer {stripe_transfer.id}")
+        return
+
+    # Derive status from Stripe transfer object
+    # Stripe Transfer has no explicit 'status' field — infer from reversed flag
+    new_status = "reversed" if stripe_transfer.reversed else "pending"
+    transfer_repo.update(db, db_obj=db_transfer, obj_in={"status": new_status})
+    logger.info(f"Transfer {db_transfer.id} updated — status={new_status}")
+
+
+def handle_transfer_reversed(db: Session, event: stripe.Event):
+    """Handle transfer reversal — funds returned from connected account to platform."""
+    from app.repositories.transfer_repository import transfer as transfer_repo
+    from datetime import datetime, timezone
+    stripe_transfer = event.data.object
+
+    db_transfer = transfer_repo.get_by_stripe_transfer_id(db, stripe_transfer.id)
+    if not db_transfer:
+        logger.warning(f"transfer.reversed webhook: no local record for Stripe transfer {stripe_transfer.id}")
+        return
+
+    amount_reversed = stripe_transfer.amount_reversed
+    is_full = (amount_reversed >= stripe_transfer.amount)
+
+    transfer_repo.update(db, db_obj=db_transfer, obj_in={
+        "status": "reversed" if is_full else "partially_reversed",
+        "amount_reversed_cents": amount_reversed,
+        "reversed_at": datetime.now(timezone.utc).isoformat(),
+    })
+    logger.info(
+        f"Transfer {db_transfer.id} reversed — "
+        f"Amount reversed: {amount_reversed/100} {stripe_transfer.currency.upper()}, "
+        f"Full reversal: {is_full}"
+    )
+
+
+# ============================================================================
+# CONNECTED ACCOUNT HANDLERS
+# ============================================================================
+
+def handle_account_updated(db: Session, event: stripe.Event):
+    """
+    Sync connected account onboarding status when Stripe fires account.updated.
+    This fires when the vendor completes the Express onboarding flow.
+    """
+    from app.repositories.connected_account_repository import connected_account as ca_repo
+    stripe_account = event.data.object
+
+    db_account = ca_repo.get_by_stripe_account_id(db, stripe_account.id)
+    if not db_account:
+        # Not a connected account we manage — safely ignore
+        logger.debug(f"account.updated: {stripe_account.id} not in local DB, skipping")
+        return
+
+    charges_enabled = stripe_account.charges_enabled
+    payouts_enabled = stripe_account.payouts_enabled
+    details_submitted = stripe_account.details_submitted
+    new_status = "active" if (charges_enabled and payouts_enabled) else "pending"
+
+    ca_repo.update(db, db_obj=db_account, obj_in={
+        "charges_enabled": charges_enabled,
+        "payouts_enabled": payouts_enabled,
+        "details_submitted": details_submitted,
+        "status": new_status,
+    })
+
+    logger.info(
+        f"ConnectedAccount {db_account.id} ({stripe_account.id}) updated — "
+        f"status={new_status}, charges_enabled={charges_enabled}, payouts_enabled={payouts_enabled}"
+    )
+
+
+# ============================================================================
 # EVENT DISPATCHER
 # ============================================================================
 
@@ -551,6 +653,14 @@ EVENT_HANDLERS = {
     # Invoice Events (Subscription Billing)
     'invoice.payment_succeeded': handle_invoice_payment_succeeded,
     'invoice.payment_failed': handle_invoice_payment_failed,
+
+    # Transfer Events
+    'transfer.created': handle_transfer_created,
+    'transfer.updated': handle_transfer_updated,
+    'transfer.reversed': handle_transfer_reversed,
+
+    # Connected Account Events
+    'account.updated': handle_account_updated,
 }
 
 def process_webhook_event(db: Session, event: stripe.Event):
