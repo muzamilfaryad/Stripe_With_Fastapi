@@ -52,6 +52,57 @@ def handle_checkout_session_completed(db: Session, event: stripe.Event):
         logger.info(f"Checkout session {checkout_session_id} completed in {session.mode} mode")
 
 # ============================================================================
+# CUSTOMER HANDLERS
+# ============================================================================
+
+def handle_customer_created(db: Session, event: stripe.Event):
+    """Handle new customer created in Stripe - sync to local Customer table"""
+    stripe_customer = event.data.object
+
+    # Check if already synced
+    db_customer = db.query(Customer).filter(
+        Customer.stripe_customer_id == stripe_customer.id
+    ).first()
+
+    if db_customer:
+        logger.info(f"Customer {stripe_customer.id} already exists locally (id={db_customer.id}). Skipping.")
+        return
+
+    # Also try to find by email to avoid duplicates
+    if stripe_customer.email:
+        db_customer = db.query(Customer).filter(
+            Customer.email == stripe_customer.email
+        ).first()
+
+    if db_customer:
+        # Link existing local customer to Stripe customer
+        if not db_customer.stripe_customer_id:
+            db_customer.stripe_customer_id = stripe_customer.id
+            db.commit()
+            logger.info(
+                f"Linked existing Customer {db_customer.id} ({db_customer.email}) "
+                f"to Stripe customer {stripe_customer.id}"
+            )
+        else:
+            logger.warning(
+                f"Customer with email {stripe_customer.email} already linked to a "
+                f"different Stripe customer ({db_customer.stripe_customer_id}). Skipping."
+            )
+        return
+
+    # Create new local customer record
+    new_customer = Customer(
+        email=stripe_customer.email or f"{stripe_customer.id}@unknown.stripe",
+        name=stripe_customer.name,
+        stripe_customer_id=stripe_customer.id,
+    )
+    db.add(new_customer)
+    db.commit()
+    db.refresh(new_customer)
+    logger.info(f"Customer {new_customer.id} created from Stripe customer {stripe_customer.id}.")
+
+
+# ============================================================================
 # PAYMENT INTENT HANDLERS
 # ============================================================================
 
@@ -332,14 +383,40 @@ def handle_charge_dispute_created(db: Session, event: stripe.Event):
 
 
 # ============================================================================
+# INVOICE HELPERS
+# ============================================================================
+
+def _get_subscription_id_from_invoice(invoice) -> str | None:
+    """
+    Extract the Stripe subscription ID from an invoice object.
+
+    Stripe API >= 2026-04-22.dahlia moved `invoice.subscription` into
+    `invoice.parent.subscription_details.subscription`.  We support both
+    shapes so the code works with old and new API versions.
+    """
+    # New API shape (2026-04-22.dahlia+)
+    try:
+        parent = invoice.parent
+        if parent and getattr(parent, 'type', None) == 'subscription_details':
+            sub_details = getattr(parent, 'subscription_details', None)
+            if sub_details:
+                return getattr(sub_details, 'subscription', None)
+    except Exception:
+        pass
+
+    # Legacy / fallback: top-level invoice.subscription
+    return getattr(invoice, 'subscription', None)
+
+
+# ============================================================================
 # INVOICE HANDLERS (For Subscriptions)
 # ============================================================================
 
 def handle_invoice_payment_succeeded(db: Session, event: stripe.Event):
     """Handle successful invoice payment (for subscriptions)"""
     invoice = event.data.object
-    subscription_id = invoice.subscription
-    
+    subscription_id = _get_subscription_id_from_invoice(invoice)
+
     if not subscription_id:
         logger.info(f"Invoice {invoice.id} paid but not related to a subscription.")
         return
@@ -382,8 +459,8 @@ def handle_invoice_payment_succeeded(db: Session, event: stripe.Event):
 def handle_invoice_payment_failed(db: Session, event: stripe.Event):
     """Handle failed invoice payment (for subscriptions)"""
     invoice = event.data.object
-    subscription_id = invoice.subscription
-    
+    subscription_id = _get_subscription_id_from_invoice(invoice)
+
     if not subscription_id:
         logger.info(f"Invoice {invoice.id} payment failed but not related to a subscription.")
         return
@@ -428,32 +505,49 @@ def handle_invoice_payment_failed(db: Session, event: stripe.Event):
         # Log error but don't raise - allow webhook to succeed
         logger.error(f"Error processing invoice.payment_failed for {invoice.id}: {str(e)}")
         # Don't re-raise - we want to return 200 OK to Stripe
-    else:
-        logger.warning(f"Subscription {subscription_id} not found for failed invoice.")
 
 # ============================================================================
 # EVENT DISPATCHER
 # ============================================================================
 
+def handle_payment_intent_created(db: Session, event: stripe.Event):
+    """Handle newly created payment intent - informational only.
+
+    A freshly created PaymentIntent is not yet captured or confirmed, so no
+    DB write is needed here.  The authoritative state change happens when
+    payment_intent.succeeded / payment_intent.payment_failed fires.
+    """
+    intent = event.data.object
+    logger.info(
+        f"PaymentIntent {intent.id} created. "
+        f"Amount: {intent.amount / 100:.2f} {intent.currency.upper()}, "
+        f"Status: {intent.status}"
+    )
+
+
 EVENT_HANDLERS = {
     # Checkout Session Events
     'checkout.session.completed': handle_checkout_session_completed,
-    
+
+    # Customer Events
+    'customer.created': handle_customer_created,
+
     # Payment Intent Events
+    'payment_intent.created': handle_payment_intent_created,
     'payment_intent.succeeded': handle_payment_intent_succeeded,
     'payment_intent.payment_failed': handle_payment_intent_failed,
     'payment_intent.canceled': handle_payment_intent_canceled,
-    
+
     # Subscription Events
     'customer.subscription.created': handle_subscription_created,
     'customer.subscription.updated': handle_subscription_updated,
     'customer.subscription.deleted': handle_subscription_deleted,
     'customer.subscription.trial_will_end': handle_subscription_trial_will_end,
-    
+
     # Charge Events (Refunds & Disputes)
     'charge.refunded': handle_charge_refunded,
     'charge.dispute.created': handle_charge_dispute_created,
-    
+
     # Invoice Events (Subscription Billing)
     'invoice.payment_succeeded': handle_invoice_payment_succeeded,
     'invoice.payment_failed': handle_invoice_payment_failed,
