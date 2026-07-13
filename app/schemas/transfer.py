@@ -41,11 +41,3 @@ class TransferResponse(BaseModel):
     class Config:
         from_attributes = True
 
-
-class TransferReverseRequest(BaseModel):
-    amount: Optional[float] = Field(
-        None,
-        gt=0,
-        description="Amount to reverse in dollars. If omitted, reverses the full transfer."
-    )
-    description: Optional[str] = Field(None, description="Reason for the reversal")

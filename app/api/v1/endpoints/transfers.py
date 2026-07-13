@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.core.database import get_db
-from app.schemas.transfer import TransferCreate, TransferResponse, TransferReverseRequest
+from app.schemas.transfer import TransferCreate, TransferResponse
 from app.repositories.transfer_repository import transfer as transfer_repo
-from app.services.transfer_service import create_transfer, reverse_transfer
+from app.services.transfer_service import create_transfer
 
 router = APIRouter()
 
@@ -57,21 +57,3 @@ def get_transfer(transfer_id: int, db: Session = Depends(get_db)):
     if not db_transfer:
         raise HTTPException(status_code=404, detail="Transfer not found")
     return db_transfer
-
-
-@router.post(
-    "/{transfer_id}/reverse",
-    response_model=TransferResponse,
-    summary="Reverse a transfer",
-    description=(
-        "Reverse a transfer — fully or partially. "
-        "Funds are returned from the connected account back to your platform balance. "
-        "Omit `amount` to reverse the full transfer."
-    ),
-)
-def reverse_transfer_endpoint(
-    transfer_id: int,
-    data: TransferReverseRequest,
-    db: Session = Depends(get_db),
-):
-    return reverse_transfer(db, transfer_id, data)

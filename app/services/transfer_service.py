@@ -11,7 +11,7 @@ from app.models.transfer import Transfer
 from app.repositories.connected_account_repository import connected_account as connected_account_repo
 from app.repositories.transfer_repository import transfer as transfer_repo
 from app.schemas.connected_account import ConnectedAccountCreate
-from app.schemas.transfer import TransferCreate, TransferReverseRequest
+from app.schemas.transfer import TransferCreate
 
 logger = logging.getLogger(__name__)
 
@@ -234,53 +234,5 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
         })
         logger.error(f"Stripe error on transfer {db_transfer.id}: {e}")
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
-
-    return db_transfer
-
-
-def reverse_transfer(db: Session, transfer_id: int, data: TransferReverseRequest) -> Transfer:
-    """
-    Reverse a transfer — fully or partially.
-    Stripe reversal returns funds from connected account back to platform.
-    """
-    db_transfer = transfer_repo.get(db, transfer_id)
-    if not db_transfer:
-        raise HTTPException(status_code=404, detail="Transfer not found")
-
-    if not db_transfer.stripe_transfer_id:
-        raise HTTPException(status_code=400, detail="Transfer has no Stripe ID — cannot reverse")
-
-    if db_transfer.status == "reversed":
-        raise HTTPException(status_code=400, detail="Transfer is already fully reversed")
-
-    reversal_params: dict = {}
-    if data.amount:
-        reversal_params["amount"] = int(round(data.amount * 100))
-    if data.description:
-        reversal_params["description"] = data.description
-
-    try:
-        reversal = stripe.Transfer.create_reversal(
-            db_transfer.stripe_transfer_id,
-            **reversal_params,
-        )
-
-        reversed_cents = reversal.amount
-        is_full_reversal = (db_transfer.amount_cents - db_transfer.amount_reversed_cents) <= reversed_cents
-
-        db_transfer = transfer_repo.update(db, db_obj=db_transfer, obj_in={
-            "status": "reversed" if is_full_reversal else "partially_reversed",
-            "reversed_at": datetime.now(timezone.utc).isoformat(),
-            "amount_reversed_cents": db_transfer.amount_reversed_cents + reversed_cents,
-        })
-
-        logger.info(
-            f"Transfer {db_transfer.id} reversed — "
-            f"Reversal amount: {reversed_cents/100} {db_transfer.currency.upper()}"
-        )
-
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error reversing transfer {db_transfer.id}: {e}")
-        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
 
     return db_transfer
