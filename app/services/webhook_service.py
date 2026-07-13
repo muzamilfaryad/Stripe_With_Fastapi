@@ -15,11 +15,12 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 def handle_checkout_session_completed(db: Session, event: stripe.Event):
-    """Handle completed checkout session - link payment_intent to payment record"""
+    """Handle completed checkout session - link payment_intent to payment record and verify capture"""
     session = event.data.object
     checkout_session_id = session.id
     payment_intent_id = session.payment_intent if session.mode == 'payment' else None
     subscription_id = session.subscription if session.mode == 'subscription' else None
+    payment_status = session.payment_status  # 'paid', 'unpaid', or 'no_payment_required'
     
     # Handle payment mode checkout
     if session.mode == 'payment' and payment_intent_id:
@@ -30,7 +31,29 @@ def handle_checkout_session_completed(db: Session, event: stripe.Event):
             payment_repo.update(db, db_obj=db_payment, obj_in={
                 "stripe_payment_intent_id": payment_intent_id
             })
-            logger.info(f"Linked Payment {db_payment.id} to PaymentIntent {payment_intent_id}")
+            logger.info(
+                f"Linked Payment {db_payment.id} to PaymentIntent {payment_intent_id}. "
+                f"Payment status: {payment_status}"
+            )
+            
+            # Verify the PaymentIntent is captured
+            try:
+                payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+                logger.info(
+                    f"PaymentIntent {payment_intent_id} status: {payment_intent.status}, "
+                    f"capture_method: {payment_intent.capture_method}, "
+                    f"amount_captured: {payment_intent.amount_captured}"
+                )
+                
+                # If payment is authorized but not captured, capture it now
+                if payment_intent.status == 'requires_capture':
+                    logger.warning(f"PaymentIntent {payment_intent_id} requires manual capture. Capturing now...")
+                    captured_intent = stripe.PaymentIntent.capture(payment_intent_id)
+                    logger.info(f"PaymentIntent {payment_intent_id} captured successfully. Amount: {captured_intent.amount_captured/100}")
+                    
+            except stripe.error.StripeError as e:
+                logger.error(f"Error checking/capturing PaymentIntent {payment_intent_id}: {str(e)}")
+                
         else:
             logger.warning(f"Checkout session {checkout_session_id} completed but no Payment found")
     

@@ -70,6 +70,13 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
                 'quantity': 1,
             }],
             mode='payment',
+            payment_intent_data={
+                'capture_method': 'automatic',  # Ensure automatic capture to update Stripe balance
+                'metadata': {
+                    'order_id': str(db_order.id),
+                    'customer_id': str(customer.id),
+                }
+            },
             success_url=settings.SUCCESS_URL + '?session_id={CHECKOUT_SESSION_ID}',
             cancel_url=settings.CANCEL_URL,
         )
@@ -84,7 +91,11 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
         db.refresh(db_order)
         db.refresh(db_payment)
         
-        logger.info(f"Successfully committed order {db_order.id} with payment {db_payment.id} and session {session.id}")
+        logger.info(
+            f"Successfully committed order {db_order.id} with payment {db_payment.id} and session {session.id}. "
+            f"Payment will be captured automatically when customer completes checkout. "
+            f"Note: Stripe balance updates when payment_intent.succeeded webhook fires."
+        )
         
         return session
         
