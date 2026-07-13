@@ -26,3 +26,13 @@ class Price(Base):
     active = Column(Boolean, default=True)
 
     product = relationship("Product", back_populates="prices")
+    
+    @property
+    def unit_amount(self) -> float:
+        """Get price in dollars"""
+        return round(self.unit_amount_cents / 100, 2)
+    
+    @unit_amount.setter
+    def unit_amount(self, dollars: float):
+        """Set price from dollars (converts to cents)"""
+        self.unit_amount_cents = int(dollars * 100)

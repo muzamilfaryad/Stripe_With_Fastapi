@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 class PaymentCreate(BaseModel):
     order_id: int
-    amount_cents: int
+    amount: float  # Amount in dollars
     currency: str = "usd"
     status: str = "pending"
     

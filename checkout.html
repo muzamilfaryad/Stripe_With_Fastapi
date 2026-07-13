@@ -130,10 +130,10 @@
 
     <script>
         // Initialize Stripe with your test publishable key
-        const stripe = Stripe('');
+        const stripe = Stripe('pk_test_51TYnES2RAgMQIcHEOsC9lCCD8tj1WFoXbLWfgoh4JNGNyxIh44CjHXuLRKifMVOvS6wOiTY21EPtth32GXntzatC00m1QNT8qk');
         
         // The client_secret from your /payments API
-        const clientSecret = '';
+        const clientSecret = 'pi_3TseSV2RAgMQIcHE1d0t9BTn_secret_B2QeeRJVve8vgJ8zqqNjRuphP';
 
         // Set up Stripe Elements with a night mode appearance
         const appearance = {
@@ -173,7 +173,7 @@
                 elements,
                 confirmParams: {
                     // Redirect to Swagger docs upon success for testing
-                    return_url: 'http://127.0.0.1:8005/docs',
+                    return_url: 'http://127.0.0.1:8000/docs',
                 },
             });
 

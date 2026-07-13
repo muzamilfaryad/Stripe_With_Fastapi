@@ -6,7 +6,7 @@ import stripe
 import logging
 from app.core.database import get_db
 from app.core.rate_limit import rate_limit
-from app.schemas.payment import PaymentCreateRequest, PaymentIntentResponse
+from app.schemas.payment import PaymentCreateRequest, PaymentIntentResponse, RefundRequest, RefundResponse
 from app.repositories.product_repository import product as product_repo
 from app.repositories.order_repository import order as order_repo, OrderCreate
 from app.repositories.payment_repository import payment as payment_repo, PaymentCreate
@@ -55,7 +55,6 @@ logger = logging.getLogger(__name__)
         429: {"description": "Rate limit exceeded"},
         500: {"description": "Internal server error"}
     },
-    tags=["payments"],
     dependencies=[Depends(rate_limit(limit=10, window_seconds=60))]
 )
 def create_payment(
@@ -119,7 +118,7 @@ def create_payment(
     if not active_price:
         raise HTTPException(status_code=400, detail="Product has no active price")
         
-    amount_cents = active_price.unit_amount_cents
+    amount = active_price.unit_amount  # Amount in dollars
     currency = active_price.currency
 
     try:
@@ -134,9 +133,9 @@ def create_payment(
         
         logger.info(f"Created pending order {db_order.id} for customer {request.customer_id}")
         
-        # 3. Create PaymentIntent in Stripe
+        # 3. Create PaymentIntent in Stripe (amount will be converted to cents in stripe_service)
         intent = stripe_service.create_payment_intent(
-            amount_cents=amount_cents,
+            amount=amount,
             currency=currency,
             metadata={
                 "order_id": str(db_order.id),
@@ -150,12 +149,12 @@ def create_payment(
         # 4. Create Payment Record with the intent ID
         db_payment = payment_repo.model(
             order_id=db_order.id,
-            amount_cents=amount_cents,
             currency=currency,
             status="pending",
             stripe_payment_intent_id=intent.id,
             idempotency_key=idempotency_key  # Store for future idempotent requests
         )
+        db_payment.amount = amount  # Use property setter (converts to cents)
         db.add(db_payment)
         
         # 5. Commit everything atomically
@@ -208,4 +207,160 @@ def create_payment(
     except Exception as e:
         db.rollback()
         logger.error(f"Unexpected error in create_payment: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
+
+
+@router.post(
+    "/{payment_id}/refund",
+    response_model=RefundResponse,
+    summary="Refund a payment",
+    description="""
+    Create a refund for a payment based on payment ID.
+    
+    **Features:**
+    - Full or partial refunds
+    - Automatic status update in database
+    - Optional refund reason tracking
+    - Rate limited to 10 requests per minute per IP
+    
+    **Flow:**
+    1. Validates payment exists and is eligible for refund
+    2. Creates Stripe refund
+    3. Updates payment status in database
+    4. Returns refund details
+    
+    **Refund Eligibility:**
+    - Payment must have status 'succeeded'
+    - Payment must have a valid Stripe payment intent ID
+    """,
+    responses={
+        200: {
+            "description": "Refund processed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "refund_id": "re_3abc123xyz789",
+                        "payment_id": 42,
+                        "amount": 10.00,
+                        "status": "succeeded",
+                        "message": "Refund processed successfully"
+                    }
+                }
+            }
+        },
+        400: {"description": "Invalid request or payment not eligible for refund"},
+        404: {"description": "Payment not found"},
+        429: {"description": "Rate limit exceeded"},
+        500: {"description": "Internal server error"}
+    },
+    dependencies=[Depends(rate_limit(limit=10, window_seconds=60))]
+)
+def refund_payment(
+    payment_id: int,
+    request: RefundRequest = Body(
+        ...,
+        examples={
+            "full_refund": {
+                "summary": "Full refund",
+                "description": "Refund the entire payment amount",
+                "value": {
+                    "reason": "requested_by_customer"
+                }
+            },
+            "partial_refund": {
+                "summary": "Partial refund",
+                "description": "Refund a specific amount",
+                "value": {
+                    "amount": 5.00,
+                    "reason": "requested_by_customer"
+                }
+            }
+        }
+    ),
+    db: Session = Depends(get_db)
+):
+    """
+    Refund a payment by payment ID. Supports both full and partial refunds.
+    """
+    
+    try:
+        # 1. Get the payment from database
+        db_payment = payment_repo.get(db, payment_id)
+        if not db_payment:
+            raise HTTPException(status_code=404, detail="Payment not found")
+        
+        # 2. Validate payment is eligible for refund
+        if not db_payment.stripe_payment_intent_id:
+            raise HTTPException(
+                status_code=400, 
+                detail="Payment has no associated Stripe payment intent"
+            )
+        
+        if db_payment.status != "succeeded":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Payment cannot be refunded. Current status: {db_payment.status}"
+            )
+        
+        # 3. Validate refund amount if partial refund
+        refund_amount = request.amount  # Amount in dollars
+        if refund_amount is not None:
+            if refund_amount > db_payment.amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Refund amount (${refund_amount}) cannot exceed payment amount (${db_payment.amount})"
+                )
+        else:
+            refund_amount = db_payment.amount
+        
+        logger.info(f"Processing refund for payment {payment_id}, amount: ${refund_amount}")
+        
+        # 4. Create refund in Stripe (amount will be converted to cents in stripe_service)
+        refund = stripe_service.create_refund(
+            payment_intent_id=db_payment.stripe_payment_intent_id,
+            amount=request.amount,  # None for full refund
+            reason=request.reason
+        )
+        
+        logger.info(f"Created Stripe refund {refund.id} for payment {payment_id}")
+        
+        # 5. Update payment status in database
+        if refund_amount == db_payment.amount:
+            # Full refund
+            db_payment.status = "refunded"
+        else:
+            # Partial refund - you might want to track this differently
+            db_payment.status = "partially_refunded"
+        
+        db.commit()
+        db.refresh(db_payment)
+        
+        logger.info(f"Updated payment {payment_id} status to {db_payment.status}")
+        
+        return RefundResponse(
+            refund_id=refund.id,
+            payment_id=payment_id,
+            amount=refund_amount,
+            status=refund.status,
+            message="Refund processed successfully"
+        )
+        
+    except stripe.error.InvalidRequestError as e:
+        db.rollback()
+        logger.error(f"Stripe invalid request for refund: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Invalid refund request: {str(e)}")
+        
+    except stripe.error.StripeError as e:
+        db.rollback()
+        logger.error(f"Stripe error during refund: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Refund processing error: {str(e)}")
+        
+    except SQLAlchemyError as e:
+        db.rollback()
+        logger.error(f"Database error during refund: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Database error occurred")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Unexpected error in refund_payment: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")

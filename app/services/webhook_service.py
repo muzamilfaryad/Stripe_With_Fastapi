@@ -264,14 +264,18 @@ def handle_charge_refunded(db: Session, event: stripe.Event):
     db_payment = payment_repo.get_by_payment_intent(db, payment_intent_id)
     
     if db_payment:
-        # Check if fully or partially refunded
-        amount_refunded = charge.amount_refunded
-        total_amount = charge.amount
+        # Check if fully or partially refunded (Stripe amounts are in cents)
+        amount_refunded_cents = charge.amount_refunded
+        total_amount_cents = charge.amount
+        
+        # Convert cents to dollars
+        amount_refunded = amount_refunded_cents / 100
+        total_amount = total_amount_cents / 100
         
         if amount_refunded >= total_amount:
             # Fully refunded
             payment_repo.update(db, db_obj=db_payment, obj_in={"status": "refunded"})
-            logger.info(f"Payment {db_payment.id} fully refunded.")
+            logger.info(f"Payment {db_payment.id} fully refunded. Amount: ${amount_refunded:.2f}")
             
             # Update order status
             db_order = order_repo.get(db, db_payment.order_id)
@@ -279,11 +283,17 @@ def handle_charge_refunded(db: Session, event: stripe.Event):
                 order_repo.update(db, db_obj=db_order, obj_in={"status": "refunded"})
         else:
             # Partially refunded
+            payment_repo.update(db, db_obj=db_payment, obj_in={"status": "partially_refunded"})
             logger.info(
                 f"Payment {db_payment.id} partially refunded. "
-                f"Refunded: {amount_refunded/100} {charge.currency.upper()}"
+                f"Refunded: ${amount_refunded:.2f}, "
+                f"Total: ${total_amount:.2f}"
             )
-            # You could add a partial_refund status or store refund amount
+            
+            # Optionally update order to partially_refunded status
+            db_order = order_repo.get(db, db_payment.order_id)
+            if db_order:
+                order_repo.update(db, db_obj=db_order, obj_in={"status": "partially_refunded"})
     else:
         logger.warning(f"Payment for PaymentIntent {payment_intent_id} not found for refund.")
 

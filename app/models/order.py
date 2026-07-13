@@ -9,7 +9,7 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
-    status = Column(String, default="pending")  # pending, paid, failed, canceled, refunded
+    status = Column(String, default="pending")  # pending, paid, failed, canceled, refunded, partially_refunded
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationships

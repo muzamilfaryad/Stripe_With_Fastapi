@@ -45,10 +45,10 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
         # 2. Create Payment record linked to the order
         db_payment = Payment(
             order_id=db_order.id,
-            amount_cents=int(checkout_req.amount * 100),  # Convert dollars to cents
             currency=checkout_req.currency,
             status='pending'
         )
+        db_payment.amount = checkout_req.amount  # Use property setter (converts to cents)
         db.add(db_payment)
         db.flush()  # Get the payment.id without committing
         

@@ -13,7 +13,7 @@ class Payment(Base):
     
     amount_cents = Column(Integer, nullable=False)
     currency = Column(String, default="usd")
-    status = Column(String, default="pending")  # pending, succeeded, failed, refunded, canceled
+    status = Column(String, default="pending")  # pending, succeeded, failed, refunded, partially_refunded, canceled
     
     # Idempotency key for preventing duplicate payment creation
     idempotency_key = Column(String, unique=True, index=True, nullable=True)
@@ -21,3 +21,13 @@ class Payment(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     order = relationship("Order", back_populates="payment")
+    
+    @property
+    def amount(self) -> float:
+        """Get amount in dollars"""
+        return round(self.amount_cents / 100, 2)
+    
+    @amount.setter
+    def amount(self, dollars: float):
+        """Set amount from dollars (converts to cents)"""
+        self.amount_cents = int(dollars * 100)

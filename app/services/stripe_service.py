@@ -60,11 +60,18 @@ class StripeService:
         raise last_exception
     
     @staticmethod
-    def create_payment_intent(amount_cents: int, currency: str, metadata: Dict[str, str] = None) -> stripe.PaymentIntent:
+    def create_payment_intent(amount: float, currency: str, metadata: Dict[str, str] = None) -> stripe.PaymentIntent:
         """
         Create a payment intent with retry logic.
+        
+        Args:
+            amount: Amount in dollars (will be converted to cents for Stripe)
+            currency: Currency code (e.g., 'usd')
+            metadata: Optional metadata dictionary
         """
         def _create():
+            # Convert dollars to cents for Stripe API (Stripe requires integer cents)
+            amount_cents = int(amount * 100)
             return stripe.PaymentIntent.create(
                 amount=amount_cents,
                 currency=currency,
@@ -142,5 +149,26 @@ class StripeService:
             return stripe.Subscription.modify(subscription_id, **kwargs)
         
         return StripeService._retry_with_backoff(_update)
+    
+    @staticmethod
+    def create_refund(payment_intent_id: str, amount: Optional[float] = None, reason: Optional[str] = None) -> stripe.Refund:
+        """
+        Create a refund for a payment intent with retry logic.
+        
+        Args:
+            payment_intent_id: The Stripe payment intent ID to refund
+            amount: Optional partial refund amount in dollars. If None, refunds full amount
+            reason: Optional reason for refund (duplicate, fraudulent, requested_by_customer)
+        """
+        def _create():
+            params = {"payment_intent": payment_intent_id}
+            if amount is not None:
+                # Convert dollars to cents for Stripe API
+                params["amount"] = int(amount * 100)
+            if reason:
+                params["reason"] = reason
+            return stripe.Refund.create(**params)
+        
+        return StripeService._retry_with_backoff(_create)
 
 stripe_service = StripeService()
