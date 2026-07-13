@@ -49,3 +49,6 @@ build/
 # Keep HTML files even if inside ignored build/dist folders
 !*.html
 !**/*.html
+
+# Ignore checkout.html specifically
+checkout.html
