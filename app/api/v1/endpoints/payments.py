@@ -211,11 +211,11 @@ def create_payment(
 
 
 @router.post(
-    "/{payment_id}/refund",
+    "/{payment_intent_id}/refund",
     response_model=RefundResponse,
     summary="Refund a payment",
     description="""
-    Create a refund for a payment based on payment ID.
+    Create a refund for a payment based on Stripe Payment Intent ID.
     
     **Features:**
     - Full or partial refunds
@@ -224,10 +224,10 @@ def create_payment(
     - Rate limited to 10 requests per minute per IP
     
     **Flow:**
-    1. Validates payment exists and is eligible for refund
-    2. Creates Stripe refund
-    3. Updates payment status in database
-    4. Returns refund details
+    - Validates payment exists and is eligible for refund
+    - Creates Stripe refund
+    - Updates payment status in database
+    - Returns refund details
     
     **Refund Eligibility:**
     - Payment must have status 'succeeded'
@@ -256,7 +256,7 @@ def create_payment(
     dependencies=[Depends(rate_limit(limit=10, window_seconds=60))]
 )
 def refund_payment(
-    payment_id: int,
+    payment_intent_id: str,
     request: RefundRequest = Body(
         ...,
         examples={
@@ -280,12 +280,12 @@ def refund_payment(
     db: Session = Depends(get_db)
 ):
     """
-    Refund a payment by payment ID. Supports both full and partial refunds.
+    Refund a payment by Stripe Payment Intent ID. Supports both full and partial refunds.
     """
     
     try:
         # 1. Get the payment from database
-        db_payment = payment_repo.get(db, payment_id)
+        db_payment = payment_repo.get_by_payment_intent(db, payment_intent_id)
         if not db_payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         
@@ -313,16 +313,16 @@ def refund_payment(
         else:
             refund_amount = db_payment.amount
         
-        logger.info(f"Processing refund for payment {payment_id}, amount: ${refund_amount}")
+        logger.info(f"Processing refund for payment intent {payment_intent_id}, amount: ${refund_amount}")
         
         # 4. Create refund in Stripe (amount will be converted to cents in stripe_service)
         refund = stripe_service.create_refund(
-            payment_intent_id=db_payment.stripe_payment_intent_id,
+            payment_intent_id=payment_intent_id,
             amount=request.amount,  # None for full refund
             reason=request.reason
         )
         
-        logger.info(f"Created Stripe refund {refund.id} for payment {payment_id}")
+        logger.info(f"Created Stripe refund {refund.id} for payment intent {payment_intent_id}")
         
         # 5. Update payment status in database
         if refund_amount == db_payment.amount:
@@ -335,11 +335,11 @@ def refund_payment(
         db.commit()
         db.refresh(db_payment)
         
-        logger.info(f"Updated payment {payment_id} status to {db_payment.status}")
+        logger.info(f"Updated payment intent {payment_intent_id} status to {db_payment.status}")
         
         return RefundResponse(
             refund_id=refund.id,
-            payment_id=payment_id,
+            payment_id=db_payment.id,
             amount=refund_amount,
             status=refund.status,
             message="Refund processed successfully"
