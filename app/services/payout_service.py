@@ -121,7 +121,7 @@ def create_payout(db: Session, data: PayoutCreate) -> Payout:
     if data.destination and data.destination not in ["string", "", "null"]:
         stripe_params["destination"] = data.destination
     
-    if data.statement_descriptor:
+    if data.statement_descriptor and data.statement_descriptor not in ["string", "", "null"]:
         stripe_params["statement_descriptor"] = data.statement_descriptor
     
     if data.description:
