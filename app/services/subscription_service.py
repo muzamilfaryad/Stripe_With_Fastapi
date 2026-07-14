@@ -174,18 +174,22 @@ class SubscriptionService:
         """Get all subscriptions for a customer."""
         return self.db.query(Subscription).filter(Subscription.customer_id == customer_id).all()
 
-    def cancel_subscription(self, subscription_id: int, cancel_immediately: bool = False):
+    def cancel_subscription(self, subscription_id: str, cancel_immediately: bool = False):
         """
         Cancel a subscription.
         
         Args:
-            subscription_id: Local subscription ID
+            subscription_id: Local subscription ID or Stripe Subscription ID
             cancel_immediately: If True, cancels immediately. If False, cancels at period end.
         
         Returns:
             Updated subscription object
         """
-        db_sub = self.db.query(Subscription).filter(Subscription.id == subscription_id).first()
+        if isinstance(subscription_id, int) or (isinstance(subscription_id, str) and subscription_id.isdigit()):
+            db_sub = self.db.query(Subscription).filter(Subscription.id == int(subscription_id)).first()
+        else:
+            db_sub = self.db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
+            
         if not db_sub:
             raise ValueError(f"Subscription with ID {subscription_id} not found")
         

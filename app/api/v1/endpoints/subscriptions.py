@@ -32,11 +32,15 @@ def get_all_subscriptions(db: Session = Depends(get_db)):
     return subscriptions
 
 @router.get("/{subscription_id}", response_model=SubscriptionResponse)
-def get_subscription(subscription_id: int, db: Session = Depends(get_db)):
+def get_subscription(subscription_id: str, db: Session = Depends(get_db)):
     """
     Get a specific subscription by ID.
     """
-    subscription = db.query(Subscription).filter(Subscription.id == subscription_id).first()
+    if subscription_id.isdigit():
+        subscription = db.query(Subscription).filter(Subscription.id == int(subscription_id)).first()
+    else:
+        subscription = db.query(Subscription).filter(Subscription.stripe_subscription_id == subscription_id).first()
+        
     if not subscription:
         raise HTTPException(status_code=404, detail=f"Subscription {subscription_id} not found")
     return subscription
@@ -109,7 +113,7 @@ def get_customer_subscriptions(customer_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/{subscription_id}", response_model=SubscriptionResponse)
 def cancel_subscription(
-    subscription_id: int,
+    subscription_id: str,
     cancel_immediately: bool = False,
     db: Session = Depends(get_db)
 ):
