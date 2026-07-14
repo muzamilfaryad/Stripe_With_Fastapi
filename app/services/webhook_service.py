@@ -533,11 +533,18 @@ def handle_invoice_payment_succeeded(db: Session, event: stripe.Event):
         ).first()
         
         if db_sub:
+            # Store the payment_intent_id from the invoice for future refunds
+            payment_intent_id = invoice.payment_intent
+            if payment_intent_id:
+                db_sub.stripe_payment_intent_id = payment_intent_id
+                logger.info(f"Stored payment_intent {payment_intent_id} for subscription {db_sub.id}")
+            
             # Update subscription status if needed
             if db_sub.status != 'active':
                 db_sub.status = 'active'
-                db.commit()
                 logger.info(f"Subscription {db_sub.id} reactivated after successful invoice payment.")
+            
+            db.commit()
             
             customer = db.query(Customer).filter(Customer.id == db_sub.customer_id).first()
             

@@ -13,6 +13,7 @@ class Subscription(Base):
     stripe_subscription_id = Column(String, unique=True, index=True, nullable=True)
     stripe_customer_id = Column(String, nullable=True)
     stripe_price_id = Column(String, nullable=True)
+    stripe_payment_intent_id = Column(String, index=True, nullable=True)  # Latest payment intent for subscription
     
     status = Column(String, default="active") # active, past_due, canceled, etc.
     cancel_at_period_end = Column(Boolean, default=False)

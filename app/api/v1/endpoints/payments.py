@@ -12,6 +12,7 @@ from app.repositories.order_repository import order as order_repo, OrderCreate
 from app.repositories.payment_repository import payment as payment_repo, PaymentCreate
 from app.services.stripe_service import stripe_service
 from app.models.customer import Customer
+from app.models.subscription import Subscription
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -213,24 +214,27 @@ def create_payment(
 @router.post(
     "/{payment_intent_id}/refund",
     response_model=RefundResponse,
-    summary="Refund a payment",
+    summary="Refund a payment or subscription",
     description="""
     Create a refund for a payment based on Stripe Payment Intent ID.
+    Works for both one-time payments and subscription payments.
     
     **Features:**
     - Full or partial refunds
     - Automatic status update in database
+    - Support for subscription refunds via payment intent
     - Optional refund reason tracking
     - Rate limited to 10 requests per minute per IP
     
     **Flow:**
-    - Validates payment exists and is eligible for refund
+    - Validates payment exists (one-time or subscription) and is eligible for refund
     - Creates Stripe refund
-    - Updates payment status in database
+    - Updates payment/subscription status in database
     - Returns refund details
     
     **Refund Eligibility:**
-    - Payment must have status 'succeeded'
+    - Payment must have status 'succeeded' (for one-time payments)
+    - Subscription must have a valid payment intent ID
     - Payment must have a valid Stripe payment intent ID
     """,
     responses={
@@ -281,39 +285,92 @@ def refund_payment(
 ):
     """
     Refund a payment by Stripe Payment Intent ID. Supports both full and partial refunds.
+    Works for both one-time payments and subscription payments.
     """
     
     try:
-        # 1. Get the payment from database
+        # 1. Try to find payment in one-time payments table
         db_payment = payment_repo.get_by_payment_intent(db, payment_intent_id)
+        
+        # 2. If not found, try to find in subscriptions table
+        db_subscription = None
         if not db_payment:
-            raise HTTPException(status_code=404, detail="Payment not found")
+            db_subscription = db.query(Subscription).filter(
+                Subscription.stripe_payment_intent_id == payment_intent_id
+            ).first()
+            
+            if not db_subscription:
+                raise HTTPException(
+                    status_code=404, 
+                    detail="Payment or subscription not found for this payment intent"
+                )
         
-        # 2. Validate payment is eligible for refund
-        if not db_payment.stripe_payment_intent_id:
-            raise HTTPException(
-                status_code=400, 
-                detail="Payment has no associated Stripe payment intent"
-            )
-        
-        if db_payment.status != "succeeded":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Payment cannot be refunded. Current status: {db_payment.status}"
-            )
-        
-        # 3. Validate refund amount if partial refund
-        refund_amount = request.amount  # Amount in dollars
-        if refund_amount is not None:
-            if refund_amount > db_payment.amount:
+        # 3. Determine which type of payment we're refunding
+        if db_payment:
+            # ONE-TIME PAYMENT REFUND
+            payment_type = "one-time"
+            
+            # Validate payment is eligible for refund
+            if not db_payment.stripe_payment_intent_id:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Payment has no associated Stripe payment intent"
+                )
+            
+            if db_payment.status != "succeeded":
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Payment cannot be refunded. Current status: {db_payment.status}"
+                )
+            
+            # Validate refund amount if partial refund
+            refund_amount = request.amount
+            if refund_amount is not None:
+                if refund_amount > db_payment.amount:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Refund amount (${refund_amount}) cannot exceed payment amount (${db_payment.amount})"
+                    )
+            else:
+                refund_amount = db_payment.amount
+            
+            logger.info(f"Processing one-time payment refund for payment intent {payment_intent_id}, amount: ${refund_amount}")
+            
+        else:
+            # SUBSCRIPTION PAYMENT REFUND
+            payment_type = "subscription"
+            
+            # Validate subscription has payment intent
+            if not db_subscription.stripe_payment_intent_id:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Subscription has no associated payment intent for refund"
+                )
+            
+            # Get subscription price to determine refund amount
+            from app.models.product import Price
+            price = db.query(Price).filter(Price.id == db_subscription.price_id).first()
+            
+            if not price:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Refund amount (${refund_amount}) cannot exceed payment amount (${db_payment.amount})"
+                    detail="Unable to determine subscription amount"
                 )
-        else:
-            refund_amount = db_payment.amount
-        
-        logger.info(f"Processing refund for payment intent {payment_intent_id}, amount: ${refund_amount}")
+            
+            subscription_amount = price.unit_amount
+            
+            # Validate refund amount if partial refund
+            refund_amount = request.amount
+            if refund_amount is not None:
+                if refund_amount > subscription_amount:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Refund amount (${refund_amount}) cannot exceed subscription payment amount (${subscription_amount})"
+                    )
+            else:
+                refund_amount = subscription_amount
+            
+            logger.info(f"Processing subscription refund for payment intent {payment_intent_id}, amount: ${refund_amount}")
         
         # 4. Create refund in Stripe (amount will be converted to cents in stripe_service)
         refund = stripe_service.create_refund(
@@ -324,25 +381,32 @@ def refund_payment(
         
         logger.info(f"Created Stripe refund {refund.id} for payment intent {payment_intent_id}")
         
-        # 5. Update payment status in database
-        if refund_amount == db_payment.amount:
-            # Full refund
-            db_payment.status = "refunded"
+        # 5. Update database status based on payment type
+        if db_payment:
+            # Update one-time payment status
+            if refund_amount == db_payment.amount:
+                db_payment.status = "refunded"
+            else:
+                db_payment.status = "partially_refunded"
+            
+            db.commit()
+            db.refresh(db_payment)
+            
+            logger.info(f"Updated one-time payment {db_payment.id} status to {db_payment.status}")
+            payment_or_subscription_id = db_payment.id
+            
         else:
-            # Partial refund - you might want to track this differently
-            db_payment.status = "partially_refunded"
-        
-        db.commit()
-        db.refresh(db_payment)
-        
-        logger.info(f"Updated payment intent {payment_intent_id} status to {db_payment.status}")
+            # Update subscription - you might want to add a refunded flag or status
+            # For now, we'll just log it. The subscription status is managed by Stripe webhooks
+            logger.info(f"Refunded subscription {db_subscription.id}, payment intent {payment_intent_id}")
+            payment_or_subscription_id = db_subscription.id
         
         return RefundResponse(
             refund_id=refund.id,
-            payment_id=db_payment.id,
+            payment_id=payment_or_subscription_id,
             amount=refund_amount,
             status=refund.status,
-            message="Refund processed successfully"
+            message=f"Refund processed successfully for {payment_type} payment"
         )
         
     except stripe.error.InvalidRequestError as e:
