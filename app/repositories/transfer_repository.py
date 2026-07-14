@@ -7,7 +7,8 @@ from app.models.transfer import Transfer
 
 
 class TransferCreate(BaseModel):
-    connected_account_id: int
+    connected_account_id: Optional[int] = None  # Deprecated - kept for backward compatibility
+    stripe_account_id: Optional[str] = None  # New field - Stripe account ID
     amount_cents: int
     currency: str = "usd"
     stripe_charge_id: Optional[str] = None

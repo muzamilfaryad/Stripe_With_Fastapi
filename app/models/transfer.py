@@ -12,8 +12,11 @@ class Transfer(Base):
     # Stripe identifier
     stripe_transfer_id = Column(String, unique=True, index=True, nullable=True)  # tr_xxx (null until Stripe confirms)
 
-    # FK to our connected account record
-    connected_account_id = Column(Integer, ForeignKey("connected_accounts.id"), nullable=False)
+    # FK to our connected account record (deprecated - kept for backward compatibility)
+    connected_account_id = Column(Integer, ForeignKey("connected_accounts.id"), nullable=True)
+
+    # Stripe account ID (new field - replaces connected_account_id FK)
+    stripe_account_id = Column(String, index=True, nullable=True)  # acct_xxx
 
     # Source transaction — ties transfer to original charge (CRITICAL for Separate Charges+Transfers)
     stripe_charge_id = Column(String, index=True, nullable=True)   # ch_xxx or py_xxx

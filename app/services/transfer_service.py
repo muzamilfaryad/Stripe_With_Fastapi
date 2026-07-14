@@ -141,24 +141,13 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
     4. DB record is created BEFORE Stripe API call (with status=pending),
        then updated with stripe_transfer_id on success.
     """
-    # Resolve the connected account
-    db_account = connected_account_repo.get(db, data.connected_account_id)
-    if not db_account:
-        raise HTTPException(status_code=404, detail="Connected account not found")
-
-    if not db_account.charges_enabled:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Connected account {db_account.stripe_account_id} has not completed onboarding. "
-                   f"charges_enabled=False"
-        )
-
+    
     # Convert dollars → cents (same pattern as Payment model)
     amount_cents = int(round(data.amount * 100))
 
     # Build a deterministic idempotency key
     idempotency_key = (
-        f"transfer-{db_account.stripe_account_id}-"
+        f"transfer-{data.stripe_account_id}-"
         f"{data.transfer_group or uuid.uuid4().hex}-"
         f"{amount_cents}"
     )
@@ -172,7 +161,8 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
     # Create DB record first (status=pending) — audit trail even if Stripe call fails
     from app.repositories.transfer_repository import TransferCreate as RepoCreate
     db_transfer = transfer_repo.create(db, obj_in=RepoCreate(
-        connected_account_id=db_account.id,
+        connected_account_id=None,  # No longer using FK to local connected account
+        stripe_account_id=data.stripe_account_id,  # Store Stripe account ID directly
         amount_cents=amount_cents,
         currency=data.currency,
         stripe_charge_id=data.stripe_charge_id,
@@ -186,10 +176,10 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
     stripe_params: dict = {
         "amount": amount_cents,
         "currency": data.currency,
-        "destination": db_account.stripe_account_id,
+        "destination": data.stripe_account_id,
         "metadata": {
             "local_transfer_id": str(db_transfer.id),
-            "connected_account_id": str(db_account.id),
+            "stripe_account_id": data.stripe_account_id,
         },
     }
     if data.stripe_charge_id:
@@ -215,7 +205,7 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
         logger.info(
             f"Transfer {db_transfer.id} created — Stripe ID: {stripe_transfer.id}, "
             f"Amount: {data.amount} {data.currency.upper()}, "
-            f"Destination: {db_account.stripe_account_id}"
+            f"Destination: {data.stripe_account_id}"
         )
 
     except stripe.error.InvalidRequestError as e:

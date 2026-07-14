@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 class TransferCreate(BaseModel):
-    connected_account_id: int = Field(gt=0, description="Local DB ID of the connected account")
+    stripe_account_id: str = Field(description="Stripe connected account ID (acct_xxx) to transfer to")
     amount: float = Field(gt=0, description="Transfer amount in dollars (e.g. 85.00)")
     currency: str = Field(default="usd", description="3-letter ISO currency code")
     stripe_charge_id: Optional[str] = Field(
@@ -21,7 +21,8 @@ class TransferCreate(BaseModel):
 class TransferResponse(BaseModel):
     id: int
     stripe_transfer_id: Optional[str] = None
-    connected_account_id: int
+    connected_account_id: Optional[int] = None  # Deprecated - kept for backward compatibility
+    stripe_account_id: Optional[str] = None  # New field - Stripe account ID
     stripe_charge_id: Optional[str] = None
     transfer_group: Optional[str] = None
 

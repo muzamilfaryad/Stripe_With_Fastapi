@@ -596,6 +596,96 @@ def handle_transfer_reversed(db: Session, event: stripe.Event):
 
 
 # ============================================================================
+# PAYOUT HANDLERS
+# ============================================================================
+
+def handle_payout_created(db: Session, event: stripe.Event):
+    """Handle payout.created webhook event."""
+    from app.repositories.payout_repository import payout as payout_repo, PayoutCreate
+    from app.repositories.connected_account_repository import connected_account as ca_repo
+    from datetime import datetime, timezone
+
+    stripe_payout = event.data.object
+    payout_id = stripe_payout.id
+
+    # Check if payout already exists
+    existing_payout = payout_repo.get_by_stripe_payout_id(db, payout_id)
+    if existing_payout:
+        logger.info(f"Payout {payout_id} already exists. Skipping.")
+        return
+
+    # Get connected account
+    stripe_account_id = event.account if hasattr(event, 'account') else None
+    if not stripe_account_id:
+        logger.warning(f"No connected account ID for payout {payout_id}")
+        return
+
+    db_account = ca_repo.get_by_stripe_account_id(db, stripe_account_id)
+    if not db_account:
+        logger.warning(f"Connected account {stripe_account_id} not found")
+        return
+
+    # Create payout record
+    db_payout = payout_repo.create(db, obj_in=PayoutCreate(
+        stripe_payout_id=payout_id,
+        connected_account_id=db_account.id,
+        amount_cents=stripe_payout.amount,
+        currency=stripe_payout.currency,
+        status=stripe_payout.status,
+        arrival_date=datetime.fromtimestamp(stripe_payout.arrival_date, tz=timezone.utc) if stripe_payout.arrival_date else None,
+        payout_type="standard",
+        description=getattr(stripe_payout, 'description', None),
+    ))
+
+    logger.info(f"Payout {db_payout.id} created: ${db_payout.amount} {db_payout.currency.upper()}")
+
+
+def handle_payout_paid(db: Session, event: stripe.Event):
+    """Handle payout.paid webhook event."""
+    from app.repositories.payout_repository import payout as payout_repo
+    from datetime import datetime, timezone
+
+    stripe_payout = event.data.object
+    payout_id = stripe_payout.id
+
+    db_payout = payout_repo.get_by_stripe_payout_id(db, payout_id)
+    if not db_payout:
+        logger.warning(f"Payout {payout_id} not found")
+        return
+
+    payout_repo.update(db, db_obj=db_payout, obj_in={
+        "status": "paid",
+        "arrival_date": datetime.fromtimestamp(stripe_payout.arrival_date, tz=timezone.utc) if stripe_payout.arrival_date else None,
+    })
+
+    logger.info(f"Payout {db_payout.id} PAID: ${db_payout.amount}")
+
+
+def handle_payout_failed(db: Session, event: stripe.Event):
+    """Handle payout.failed webhook event."""
+    from app.repositories.payout_repository import payout as payout_repo
+
+    stripe_payout = event.data.object
+    payout_id = stripe_payout.id
+
+    db_payout = payout_repo.get_by_stripe_payout_id(db, payout_id)
+    if not db_payout:
+        logger.warning(f"Payout {payout_id} not found")
+        return
+
+    failure_code = getattr(stripe_payout, 'failure_code', 'unknown')
+    failure_message = getattr(stripe_payout, 'failure_message', 'No failure message')
+
+    payout_repo.update(db, db_obj=db_payout, obj_in={
+        "status": "failed",
+        "failure_code": failure_code,
+        "failure_message": failure_message,
+    })
+
+    logger.error(f"Payout {db_payout.id} FAILED: {failure_code} - {failure_message}")
+
+
+# ============================================================================
 # CONNECTED ACCOUNT HANDLERS
 # ============================================================================
 
@@ -681,6 +771,11 @@ EVENT_HANDLERS = {
     'transfer.created': handle_transfer_created,
     'transfer.updated': handle_transfer_updated,
     'transfer.reversed': handle_transfer_reversed,
+
+    # Payout Events
+    'payout.created': handle_payout_created,
+    'payout.paid': handle_payout_paid,
+    'payout.failed': handle_payout_failed,
 
     # Connected Account Events
     'account.updated': handle_account_updated,

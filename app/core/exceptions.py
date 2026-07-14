@@ -25,3 +25,13 @@ def register_exception_handlers(app: FastAPI):
     async def not_found_handler(request: Request, exc: ResourceNotFoundError):
         logger.warning(f"Not Found: {exc.message}")
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+    
+    @app.exception_handler(Exception)
+    async def generic_exception_handler(request: Request, exc: Exception):
+        import traceback
+        error_traceback = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        logger.error(f"Unhandled exception: {exc}\n{error_traceback}")
+        return JSONResponse(
+            status_code=500, 
+            content={"detail": f"Internal server error: {str(exc)}"}
+        )
