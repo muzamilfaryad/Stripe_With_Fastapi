@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, Numeric
 from sqlalchemy.sql import func
 from app.core.database import Base
 
@@ -23,8 +23,8 @@ class Payout(Base):
     # Stripe connected account ID (acct_xxx) - for payouts on connected accounts
     stripe_account_id = Column(String, index=True, nullable=True)
 
-    # Amount always stored in cents (no float precision issues)
-    amount_cents = Column(Integer, nullable=False)
+    # Amount stored in dollars (e.g. 10.00 for $10.00)
+    amount = Column(Numeric(precision=12, scale=2), nullable=False)
     currency = Column(String, default="usd", nullable=False)
 
     # Payout method: standard (5-7 business days) or instant (30 minutes)
@@ -71,7 +71,4 @@ class Payout(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    @property
-    def amount(self) -> float:
-        """Get payout amount in dollars"""
-        return round(self.amount_cents / 100, 2)
+

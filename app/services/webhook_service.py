@@ -536,20 +536,47 @@ def handle_invoice_payment_failed(db: Session, event: stripe.Event):
 def handle_transfer_created(db: Session, event: stripe.Event):
     """Stripe confirmed transfer creation — sync stripe_transfer_id and status."""
     from app.repositories.transfer_repository import transfer as transfer_repo
+    from app.repositories.connected_account_repository import connected_account as ca_repo
     stripe_transfer = event.data.object
 
+    # Try to find by stripe_transfer_id first
     db_transfer = transfer_repo.get_by_stripe_transfer_id(db, stripe_transfer.id)
+    
+    # If not found, try to find by local_transfer_id in metadata
+    if not db_transfer and hasattr(stripe_transfer, 'metadata') and stripe_transfer.metadata:
+        local_transfer_id = stripe_transfer.metadata.get('local_transfer_id')
+        if local_transfer_id:
+            db_transfer = transfer_repo.get(db, int(local_transfer_id))
+    
     if db_transfer:
+        # Update transfer with Stripe ID if not already set
         transfer_repo.update(db, db_obj=db_transfer, obj_in={
             "stripe_transfer_id": stripe_transfer.id,
             "status": "pending",
         })
+        
+        # Update connected account balance
+        stripe_account_id = stripe_transfer.destination
+        if stripe_account_id:
+            db_account = ca_repo.get_by_stripe_account_id(db, stripe_account_id)
+            if db_account:
+                # Add transfer amount to connected account balance
+                current_balance = getattr(db_account, 'balance_cents', 0) or 0
+                new_balance = current_balance + stripe_transfer.amount
+                ca_repo.update(db, db_obj=db_account, obj_in={
+                    "balance_cents": new_balance
+                })
+                logger.info(
+                    f"Updated ConnectedAccount {db_account.id} balance: "
+                    f"${current_balance/100:.2f} → ${new_balance/100:.2f}"
+                )
+        
         logger.info(
-            f"Transfer {db_transfer.id} confirmed by Stripe — "
-            f"ID: {stripe_transfer.id}, Amount: {stripe_transfer.amount/100} {stripe_transfer.currency.upper()}"
+            f"✅ Transfer {db_transfer.id} confirmed by Stripe — "
+            f"ID: {stripe_transfer.id}, Amount: ${stripe_transfer.amount/100:.2f} {stripe_transfer.currency.upper()}"
         )
     else:
-        logger.warning(f"transfer.created webhook: no local record for Stripe transfer {stripe_transfer.id}")
+        logger.warning(f"⚠️  transfer.created webhook: no local record for Stripe transfer {stripe_transfer.id}")
 
 
 def handle_transfer_updated(db: Session, event: stripe.Event):
@@ -572,6 +599,7 @@ def handle_transfer_updated(db: Session, event: stripe.Event):
 def handle_transfer_reversed(db: Session, event: stripe.Event):
     """Handle transfer reversal — funds returned from connected account to platform."""
     from app.repositories.transfer_repository import transfer as transfer_repo
+    from app.repositories.connected_account_repository import connected_account as ca_repo
     from datetime import datetime, timezone
     stripe_transfer = event.data.object
 
@@ -588,9 +616,25 @@ def handle_transfer_reversed(db: Session, event: stripe.Event):
         "amount_reversed_cents": amount_reversed,
         "reversed_at": datetime.now(timezone.utc).isoformat(),
     })
+    
+    # Update connected account balance - subtract reversed amount
+    stripe_account_id = stripe_transfer.destination
+    if stripe_account_id:
+        db_account = ca_repo.get_by_stripe_account_id(db, stripe_account_id)
+        if db_account:
+            current_balance = getattr(db_account, 'balance_cents', 0) or 0
+            new_balance = current_balance - amount_reversed
+            ca_repo.update(db, db_obj=db_account, obj_in={
+                "balance_cents": new_balance
+            })
+            logger.info(
+                f"Updated ConnectedAccount {db_account.id} balance after reversal: "
+                f"${current_balance/100:.2f} → ${new_balance/100:.2f}"
+            )
+    
     logger.info(
         f"Transfer {db_transfer.id} reversed — "
-        f"Amount reversed: {amount_reversed/100} {stripe_transfer.currency.upper()}, "
+        f"Amount reversed: ${amount_reversed/100:.2f} {stripe_transfer.currency.upper()}, "
         f"Full reversal: {is_full}"
     )
 
@@ -637,7 +681,17 @@ def handle_payout_created(db: Session, event: stripe.Event):
         description=getattr(stripe_payout, 'description', None),
     ))
 
-    logger.info(f"Payout {db_payout.id} created: ${db_payout.amount} {db_payout.currency.upper()}")
+    # Update connected account balance - subtract payout amount
+    current_balance = getattr(db_account, 'balance_cents', 0) or 0
+    new_balance = current_balance - stripe_payout.amount
+    ca_repo.update(db, db_obj=db_account, obj_in={
+        "balance_cents": new_balance
+    })
+
+    logger.info(
+        f"Payout {db_payout.id} created: ${db_payout.amount} {db_payout.currency.upper()}, "
+        f"Account {db_account.id} balance: ${current_balance/100:.2f} → ${new_balance/100:.2f}"
+    )
 
 
 def handle_payout_paid(db: Session, event: stripe.Event):

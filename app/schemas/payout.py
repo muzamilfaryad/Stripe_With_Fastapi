@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -13,10 +13,10 @@ class PayoutCreate(BaseModel):
     Reference: https://docs.stripe.com/api/payouts/create
     """
     stripe_account_id: str = Field(description="Stripe connected account ID (acct_xxx) to make payout from")
-    amount: int = Field(
-        gt=0, 
-        ge=100,  # Minimum $1.00 (100 cents) for USD
-        description="Payout amount in cents (e.g. 100 for $1.00). Minimum: 100 cents ($1.00) for USD"
+    amount: float = Field(
+        gt=0,
+        ge=1.00,  # Minimum $1.00 for USD
+        description="Payout amount in dollars (e.g. 1.00 for $1.00). Minimum: $1.00 for USD"
     )
     currency: str = Field(default="usd", description="3-letter ISO currency code (lowercase)")
     method: str = Field(
@@ -51,7 +51,7 @@ class PayoutResponse(BaseModel):
     stripe_payout_id: Optional[str] = None
     stripe_account_id: Optional[str] = None  # Stripe account ID (acct_xxx)
     
-    amount_cents: int  # Stored in DB as cents
+    amount: float  # Stored in DB as dollars
     currency: str
     method: str
     type: str
@@ -72,12 +72,6 @@ class PayoutResponse(BaseModel):
     
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-
-    @computed_field
-    @property
-    def amount(self) -> float:
-        """Convert cents to dollars for API response"""
-        return round(self.amount_cents / 100, 2)
 
     class Config:
         from_attributes = True

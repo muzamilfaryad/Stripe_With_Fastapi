@@ -20,6 +20,7 @@ class ConnectedAccountUpdate(BaseModel):
     status: Optional[str] = None
     email: Optional[str] = None
     display_name: Optional[str] = None
+    balance_cents: Optional[int] = None
 
 
 class CRUDConnectedAccount(CRUDBase[ConnectedAccount, ConnectedAccountCreate, ConnectedAccountUpdate]):

@@ -25,8 +25,16 @@ class ConnectedAccount(Base):
     # Status: pending (not onboarded), active, restricted, disabled
     status = Column(String, default="pending")
 
+    # Balance tracking - tracks total amount transferred to this account (in cents)
+    balance_cents = Column(Integer, default=0, nullable=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationship — one account can receive many transfers
     transfers = relationship("Transfer", back_populates="connected_account")
+
+    @property
+    def balance(self) -> float:
+        """Get account balance in dollars"""
+        return round(self.balance_cents / 100, 2)

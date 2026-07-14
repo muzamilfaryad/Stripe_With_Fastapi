@@ -9,7 +9,7 @@ from app.models.payout import Payout
 
 class PayoutCreate(BaseModel):
     stripe_account_id: Optional[str] = None  # Stripe account ID (acct_xxx)
-    amount_cents: int
+    amount: float
     currency: str = "usd"
     method: str = "standard"
     type: str = "bank_account"

@@ -35,8 +35,9 @@ def create_payout(db: Session, data: PayoutCreate) -> Payout:
     Reference: https://docs.stripe.com/api/payouts/create
     """
     
-    # Amount is already in cents from the schema
-    amount_cents = data.amount
+    # Amount in dollars (input); convert to cents only for Stripe API
+    amount_dollars = data.amount
+    amount_cents = int(round(amount_dollars * 100))
     
     # Validate minimum payout amount based on currency
     min_amounts = {
@@ -52,13 +53,13 @@ def create_payout(db: Session, data: PayoutCreate) -> Payout:
         "dkk": 250,   # DKK 2.50
     }
     
-    min_amount = min_amounts.get(data.currency.lower(), 100)
-    if amount_cents < min_amount:
+    min_amount_cents = min_amounts.get(data.currency.lower(), 100)
+    if amount_cents < min_amount_cents:
         currency_display = data.currency.upper()
-        min_display = min_amount / 100 if data.currency.lower() != "jpy" else min_amount
+        min_display = min_amount_cents / 100 if data.currency.lower() != "jpy" else min_amount_cents
         raise HTTPException(
             status_code=400,
-            detail=f"Amount too small. Minimum payout for {currency_display} is {min_display} {currency_display} ({min_amount} cents)"
+            detail=f"Amount too small. Minimum payout for {currency_display} is {min_display} {currency_display}"
         )
     
     # Validate method
@@ -89,7 +90,7 @@ def create_payout(db: Session, data: PayoutCreate) -> Payout:
     from app.repositories.payout_repository import PayoutCreate as RepoCreate
     db_payout = payout_repo.create(db, obj_in=RepoCreate(
         stripe_account_id=data.stripe_account_id,
-        amount_cents=amount_cents,
+        amount=amount_dollars,          # stored in dollars
         currency=data.currency,
         method=data.method,
         type="bank_account",  # Default type

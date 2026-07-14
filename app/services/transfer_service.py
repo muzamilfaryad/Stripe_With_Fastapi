@@ -182,7 +182,7 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
             "stripe_account_id": data.stripe_account_id,
         },
     }
-    if data.stripe_charge_id:
+    if data.stripe_charge_id and data.stripe_charge_id.lower() not in ["null", "none", ""]:
         # CRITICAL: source_transaction prevents "Insufficient funds" errors
         stripe_params["source_transaction"] = data.stripe_charge_id
     if data.transfer_group:
