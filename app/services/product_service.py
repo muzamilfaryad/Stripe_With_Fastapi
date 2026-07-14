@@ -40,7 +40,7 @@ def create_product(db: Session, product_data: ProductCreate) -> Product:
             stripe_price_id=stripe_price.id,
             product_id=db_product.id,
             currency=price_data.currency,
-            unit_amount_cents=unit_amount_cents,  # Store in cents
+            unit_amount=price_data.unit_amount,  # Store in dollars
             recurring_interval=price_data.recurring_interval
         )
         db.add(db_price)

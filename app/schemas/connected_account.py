@@ -23,8 +23,7 @@ class ConnectedAccountResponse(BaseModel):
     status: str
 
     # Balance tracking
-    balance_cents: int = Field(default=0, description="Total amount transferred to this account (in cents)")
-    balance: Optional[float] = Field(None, description="Total amount transferred to this account (in dollars)")
+    balance: float = Field(default=0.0, description="Total amount transferred to this account (in dollars)")
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

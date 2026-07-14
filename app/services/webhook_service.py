@@ -125,6 +125,89 @@ def handle_customer_created(db: Session, event: stripe.Event):
     logger.info(f"Customer {new_customer.id} created from Stripe customer {stripe_customer.id}.")
 
 
+def handle_customer_updated(db: Session, event: stripe.Event):
+    """Handle customer update in Stripe - sync changes to local Customer table"""
+    stripe_customer = event.data.object
+
+    # Find local customer by Stripe customer ID
+    db_customer = db.query(Customer).filter(
+        Customer.stripe_customer_id == stripe_customer.id
+    ).first()
+
+    if not db_customer:
+        logger.warning(
+            f"Customer {stripe_customer.id} not found locally for update. "
+            f"This may be a customer created outside the system."
+        )
+        # Optionally create the customer if it doesn't exist
+        handle_customer_created(db, event)
+        return
+
+    # Track what changed for logging
+    changes = []
+    
+    # Update email if changed
+    new_email = stripe_customer.email or db_customer.email
+    if new_email != db_customer.email:
+        changes.append(f"email: {db_customer.email} → {new_email}")
+        db_customer.email = new_email
+
+    # Update name if changed
+    new_name = stripe_customer.name
+    if new_name != db_customer.name:
+        changes.append(f"name: {db_customer.name} → {new_name}")
+        db_customer.name = new_name
+
+    if changes:
+        db.commit()
+        logger.info(
+            f"Customer {db_customer.id} ({stripe_customer.id}) updated: "
+            f"{', '.join(changes)}"
+        )
+    else:
+        logger.info(f"Customer {db_customer.id} ({stripe_customer.id}) updated with no local changes.")
+
+
+def handle_customer_deleted(db: Session, event: stripe.Event):
+    """Handle customer deletion in Stripe - soft delete or mark as deleted locally"""
+    stripe_customer = event.data.object
+
+    # Find local customer by Stripe customer ID
+    db_customer = db.query(Customer).filter(
+        Customer.stripe_customer_id == stripe_customer.id
+    ).first()
+
+    if not db_customer:
+        logger.warning(
+            f"Customer {stripe_customer.id} not found locally for deletion. "
+            f"May have already been deleted or never synced."
+        )
+        return
+
+    # Check for related data before deletion
+    has_subscriptions = db.query(Subscription).filter(
+        Subscription.customer_id == db_customer.id
+    ).count() > 0
+
+    if has_subscriptions:
+        # Don't delete if customer has subscriptions - just log warning
+        logger.warning(
+            f"Customer {db_customer.id} ({stripe_customer.id}) deleted in Stripe "
+            f"but has active subscriptions locally. Consider implementing soft delete."
+        )
+        # TODO: Implement soft delete flag in Customer model
+        # db_customer.is_deleted = True
+        # db_customer.deleted_at = datetime.now(timezone.utc)
+        # db.commit()
+    else:
+        # Safe to delete - no related data
+        db.delete(db_customer)
+        db.commit()
+        logger.info(
+            f"Customer {db_customer.id} ({stripe_customer.id}) deleted from local database."
+        )
+
+
 # ============================================================================
 # PAYMENT INTENT HANDLERS
 # ============================================================================
@@ -560,15 +643,15 @@ def handle_transfer_created(db: Session, event: stripe.Event):
         if stripe_account_id:
             db_account = ca_repo.get_by_stripe_account_id(db, stripe_account_id)
             if db_account:
-                # Add transfer amount to connected account balance
-                current_balance = getattr(db_account, 'balance_cents', 0) or 0
-                new_balance = current_balance + stripe_transfer.amount
+                # Add transfer amount to connected account balance (convert to dollars)
+                current_balance = getattr(db_account, 'balance', 0.0) or 0.0
+                new_balance = current_balance + (stripe_transfer.amount / 100.0)
                 ca_repo.update(db, db_obj=db_account, obj_in={
-                    "balance_cents": new_balance
+                    "balance": new_balance
                 })
                 logger.info(
                     f"Updated ConnectedAccount {db_account.id} balance: "
-                    f"${current_balance/100:.2f} → ${new_balance/100:.2f}"
+                    f"${current_balance:.2f} → ${new_balance:.2f}"
                 )
         
         logger.info(
@@ -613,7 +696,7 @@ def handle_transfer_reversed(db: Session, event: stripe.Event):
 
     transfer_repo.update(db, db_obj=db_transfer, obj_in={
         "status": "reversed" if is_full else "partially_reversed",
-        "amount_reversed_cents": amount_reversed,
+        "amount_reversed": amount_reversed / 100.0,
         "reversed_at": datetime.now(timezone.utc).isoformat(),
     })
     
@@ -622,14 +705,14 @@ def handle_transfer_reversed(db: Session, event: stripe.Event):
     if stripe_account_id:
         db_account = ca_repo.get_by_stripe_account_id(db, stripe_account_id)
         if db_account:
-            current_balance = getattr(db_account, 'balance_cents', 0) or 0
-            new_balance = current_balance - amount_reversed
+            current_balance = getattr(db_account, 'balance', 0.0) or 0.0
+            new_balance = current_balance - (amount_reversed / 100.0)
             ca_repo.update(db, db_obj=db_account, obj_in={
-                "balance_cents": new_balance
+                "balance": new_balance
             })
             logger.info(
                 f"Updated ConnectedAccount {db_account.id} balance after reversal: "
-                f"${current_balance/100:.2f} → ${new_balance/100:.2f}"
+                f"${current_balance:.2f} → ${new_balance:.2f}"
             )
     
     logger.info(
@@ -669,11 +752,11 @@ def handle_payout_created(db: Session, event: stripe.Event):
         logger.warning(f"Connected account {stripe_account_id} not found")
         return
 
-    # Create payout record
+    # Create payout record (converting cents to dollars)
     db_payout = payout_repo.create(db, obj_in=PayoutCreate(
         stripe_payout_id=payout_id,
         connected_account_id=db_account.id,
-        amount_cents=stripe_payout.amount,
+        amount=stripe_payout.amount / 100.0,
         currency=stripe_payout.currency,
         status=stripe_payout.status,
         arrival_date=datetime.fromtimestamp(stripe_payout.arrival_date, tz=timezone.utc) if stripe_payout.arrival_date else None,
@@ -682,15 +765,15 @@ def handle_payout_created(db: Session, event: stripe.Event):
     ))
 
     # Update connected account balance - subtract payout amount
-    current_balance = getattr(db_account, 'balance_cents', 0) or 0
-    new_balance = current_balance - stripe_payout.amount
+    current_balance = getattr(db_account, 'balance', 0.0) or 0.0
+    new_balance = current_balance - (stripe_payout.amount / 100.0)
     ca_repo.update(db, db_obj=db_account, obj_in={
-        "balance_cents": new_balance
+        "balance": new_balance
     })
 
     logger.info(
         f"Payout {db_payout.id} created: ${db_payout.amount} {db_payout.currency.upper()}, "
-        f"Account {db_account.id} balance: ${current_balance/100:.2f} → ${new_balance/100:.2f}"
+        f"Account {db_account.id} balance: ${current_balance:.2f} → ${new_balance:.2f}"
     )
 
 
@@ -800,6 +883,8 @@ EVENT_HANDLERS = {
 
     # Customer Events
     'customer.created': handle_customer_created,
+    'customer.updated': handle_customer_updated,
+    'customer.deleted': handle_customer_deleted,
 
     # Payment Intent Events
     'payment_intent.created': handle_payment_intent_created,

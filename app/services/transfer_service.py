@@ -142,7 +142,7 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
        then updated with stripe_transfer_id on success.
     """
     
-    # Convert dollars → cents (same pattern as Payment model)
+    # Convert dollars → cents only for Stripe API
     amount_cents = int(round(data.amount * 100))
 
     # Build a deterministic idempotency key
@@ -163,7 +163,7 @@ def create_transfer(db: Session, data: TransferCreate) -> Transfer:
     db_transfer = transfer_repo.create(db, obj_in=RepoCreate(
         connected_account_id=None,  # No longer using FK to local connected account
         stripe_account_id=data.stripe_account_id,  # Store Stripe account ID directly
-        amount_cents=amount_cents,
+        amount=data.amount,
         currency=data.currency,
         stripe_charge_id=data.stripe_charge_id,
         transfer_group=data.transfer_group,

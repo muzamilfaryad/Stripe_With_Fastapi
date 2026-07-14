@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -24,8 +24,8 @@ class Transfer(Base):
     # Grouping — links charge + all related transfers (e.g. ORDER_123 or SUB_456)
     transfer_group = Column(String, index=True, nullable=True)
 
-    # Amount always stored in cents (no float precision issues)
-    amount_cents = Column(Integer, nullable=False)
+    # Amount always stored in dollars natively
+    amount = Column(Numeric(10, 2), nullable=False)
     currency = Column(String, default="usd", nullable=False)
 
     # Status lifecycle: pending → paid → reversed | failed
@@ -38,7 +38,7 @@ class Transfer(Base):
 
     # Reversal tracking
     reversed_at = Column(DateTime(timezone=True), nullable=True)
-    amount_reversed_cents = Column(Integer, default=0)
+    amount_reversed = Column(Numeric(10, 2), default=0)
 
     # Idempotency — prevents double-transfers (same key = same transfer)
     idempotency_key = Column(String, unique=True, index=True, nullable=True)
@@ -48,13 +48,3 @@ class Transfer(Base):
 
     # Relationships
     connected_account = relationship("ConnectedAccount", back_populates="transfers")
-
-    @property
-    def amount(self) -> float:
-        """Get transfer amount in dollars"""
-        return round(self.amount_cents / 100, 2)
-
-    @property
-    def amount_reversed(self) -> float:
-        """Get reversed amount in dollars"""
-        return round(self.amount_reversed_cents / 100, 2)

@@ -48,7 +48,7 @@ def create_checkout_session(db: Session, checkout_req: CheckoutRequest):
             currency=checkout_req.currency,
             status='pending'
         )
-        db_payment.amount = checkout_req.amount  # Use property setter (converts to cents)
+        db_payment.amount = checkout_req.amount  # Assign dollars directly
         db.add(db_payment)
         db.flush()  # Get the payment.id without committing
         

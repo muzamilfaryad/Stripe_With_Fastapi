@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator, computed_field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 
 class PriceBase(BaseModel):
@@ -20,15 +20,9 @@ class PriceResponse(BaseModel):
     id: int
     stripe_price_id: str
     currency: str
-    unit_amount_cents: int  # Stored in DB as cents
+    unit_amount: float  # Stored in DB as dollars
     recurring_interval: Optional[str] = None
     active: bool
-    
-    @computed_field
-    @property
-    def unit_amount(self) -> float:
-        """Convert cents to dollars for API response"""
-        return round(self.unit_amount_cents / 100, 2)
     
     class Config:
         from_attributes = True

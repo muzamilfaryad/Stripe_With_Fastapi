@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, Numeric
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -21,18 +21,8 @@ class Price(Base):
     stripe_price_id = Column(String, unique=True, index=True, nullable=False)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
     currency = Column(String, default="usd")
-    unit_amount_cents = Column(Integer, nullable=False)  # Always in cents for precision
+    unit_amount = Column(Numeric(10, 2), nullable=False)  # Always in dollars
     recurring_interval = Column(String, nullable=True) # e.g., 'month', 'year'. If null, it's one-time
     active = Column(Boolean, default=True)
 
     product = relationship("Product", back_populates="prices")
-    
-    @property
-    def unit_amount(self) -> float:
-        """Get price in dollars"""
-        return round(self.unit_amount_cents / 100, 2)
-    
-    @unit_amount.setter
-    def unit_amount(self, dollars: float):
-        """Set price from dollars (converts to cents)"""
-        self.unit_amount_cents = int(dollars * 100)
